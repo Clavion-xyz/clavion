@@ -1,0 +1,68 @@
+# Stage 1: Build
+FROM node:20-alpine AS builder
+WORKDIR /app
+
+# Copy workspace config first for better layer caching
+COPY package.json package-lock.json tsconfig.base.json tsconfig.json ./
+
+# Copy all package.json files for workspace resolution
+COPY packages/types/package.json packages/types/package.json
+COPY packages/audit/package.json packages/audit/package.json
+COPY packages/policy/package.json packages/policy/package.json
+COPY packages/signer/package.json packages/signer/package.json
+COPY packages/preflight/package.json packages/preflight/package.json
+COPY packages/registry/package.json packages/registry/package.json
+COPY packages/sandbox/package.json packages/sandbox/package.json
+COPY packages/core/package.json packages/core/package.json
+COPY packages/adapter-openclaw/package.json packages/adapter-openclaw/package.json
+
+RUN npm ci
+
+# Copy all package source
+COPY packages/ packages/
+
+RUN npm run build
+
+# Stage 2: Runtime
+FROM node:20-alpine
+WORKDIR /app
+
+RUN addgroup -S iscl && adduser -S iscl -G iscl
+
+# Copy built output and node_modules
+COPY --from=builder /app/packages/types/dist/ packages/types/dist/
+COPY --from=builder /app/packages/audit/dist/ packages/audit/dist/
+COPY --from=builder /app/packages/policy/dist/ packages/policy/dist/
+COPY --from=builder /app/packages/signer/dist/ packages/signer/dist/
+COPY --from=builder /app/packages/preflight/dist/ packages/preflight/dist/
+COPY --from=builder /app/packages/registry/dist/ packages/registry/dist/
+COPY --from=builder /app/packages/sandbox/dist/ packages/sandbox/dist/
+COPY --from=builder /app/packages/core/dist/ packages/core/dist/
+COPY --from=builder /app/node_modules/ node_modules/
+
+# Copy all package.json files (needed for ESM module resolution)
+COPY --from=builder /app/package.json ./
+COPY --from=builder /app/packages/types/package.json packages/types/package.json
+COPY --from=builder /app/packages/audit/package.json packages/audit/package.json
+COPY --from=builder /app/packages/policy/package.json packages/policy/package.json
+COPY --from=builder /app/packages/signer/package.json packages/signer/package.json
+COPY --from=builder /app/packages/preflight/package.json packages/preflight/package.json
+COPY --from=builder /app/packages/registry/package.json packages/registry/package.json
+COPY --from=builder /app/packages/sandbox/package.json packages/sandbox/package.json
+COPY --from=builder /app/packages/core/package.json packages/core/package.json
+
+# Copy seccomp profile for sandbox
+COPY --from=builder /app/packages/sandbox/docker/ packages/sandbox/docker/
+
+RUN mkdir -p /home/iscl/.iscl/keystore /home/iscl/.iscl/data && chown -R iscl:iscl /home/iscl
+
+USER iscl
+
+EXPOSE 3100
+
+ENV ISCL_HOST=0.0.0.0
+ENV ISCL_PORT=3100
+ENV ISCL_AUDIT_DB=/home/iscl/.iscl/data/audit.sqlite
+ENV ISCL_KEYSTORE_PATH=/home/iscl/.iscl/keystore
+
+CMD ["node", "packages/core/dist/main.js"]
