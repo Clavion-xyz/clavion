@@ -2,11 +2,11 @@ import { describe, test, expect, beforeAll, afterAll } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildApp } from "../../core/api/app.js";
-import { EncryptedKeystore } from "../../core/wallet/keystore.js";
-import { validFixtures } from "../../spec/fixtures/index.js";
+import { buildApp } from "@clavion/core";
+import { EncryptedKeystore } from "@clavion/signer";
+import { validFixtures } from "../../tools/fixtures/index.js";
 import type { FastifyInstance } from "fastify";
-import type { PolicyConfig, TxIntent } from "../../core/types.js";
+import type { PolicyConfig, TxIntent } from "@clavion/types";
 
 const TEST_KEY =
   "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80" as const;

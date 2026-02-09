@@ -2,10 +2,10 @@ import { describe, test, expect, beforeAll, afterAll } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildApp } from "../../core/api/app.js";
-import { validFixtures } from "../../spec/fixtures/index.js";
+import { buildApp } from "@clavion/core";
+import { validFixtures } from "../../tools/fixtures/index.js";
 import type { FastifyInstance } from "fastify";
-import type { PolicyConfig, TxIntent } from "../../core/types.js";
+import type { PolicyConfig, TxIntent } from "@clavion/types";
 
 function rateLimitConfig(maxTxPerHour: number): PolicyConfig {
   return {

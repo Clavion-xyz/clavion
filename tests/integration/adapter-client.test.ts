@@ -3,10 +3,10 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
-import { buildApp } from "../../core/api/app.js";
-import { ISCLClient, ISCLError } from "../../adapter/shared/iscl-client.js";
-import { validFixtures } from "../../spec/fixtures/index.js";
-import type { PolicyConfig } from "../../core/types.js";
+import { buildApp } from "@clavion/core";
+import { ISCLClient, ISCLError } from "@clavion/adapter-openclaw";
+import { validFixtures } from "../../tools/fixtures/index.js";
+import type { PolicyConfig } from "@clavion/types";
 
 function permissiveConfig(): PolicyConfig {
   return {

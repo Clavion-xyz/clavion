@@ -2,7 +2,7 @@ import { describe, test, expect, beforeAll, afterAll } from "vitest";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { hashFile, verifyFileHashes } from "../../core/skill/file-hasher.js";
+import { hashFile, verifyFileHashes } from "@clavion/registry";
 
 describe("SecurityTest_C4: Tampered skill package detected", () => {
   let tempDir: string;

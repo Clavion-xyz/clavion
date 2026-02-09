@@ -3,15 +3,17 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { FastifyInstance } from "fastify";
-import { buildApp } from "../../core/api/app.js";
-import { ISCLClient } from "../../adapter/shared/iscl-client.js";
-import { handleTransfer } from "../../adapter/skills/clavion-transfer/index.js";
-import { handleTransferNative } from "../../adapter/skills/clavion-transfer-native/index.js";
-import { handleApprove } from "../../adapter/skills/clavion-approve/index.js";
-import { handleSwap } from "../../adapter/skills/clavion-swap/index.js";
-import { handleBalance } from "../../adapter/skills/clavion-balance/index.js";
-import { verifyInstallation } from "../../adapter/install.js";
-import type { PolicyConfig } from "../../core/types.js";
+import { buildApp } from "@clavion/core";
+import {
+  ISCLClient,
+  handleTransfer,
+  handleTransferNative,
+  handleApprove,
+  handleSwap,
+  handleBalance,
+  verifyInstallation,
+} from "@clavion/adapter-openclaw";
+import type { PolicyConfig } from "@clavion/types";
 import type {
   TransferParams,
   TransferNativeParams,
@@ -19,7 +21,7 @@ import type {
   SwapParams,
   BalanceParams,
   AssetParam,
-} from "../../adapter/skills/types.js";
+} from "@clavion/adapter-openclaw";
 
 const WALLET = "0x1234567890abcdef1234567890abcdef12345678";
 

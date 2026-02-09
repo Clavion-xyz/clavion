@@ -3,11 +3,10 @@ import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { privateKeyToAddress } from "viem/accounts";
-import { buildApp } from "../../core/api/app.js";
-import { signManifest } from "../../core/skill/manifest-signer.js";
-import { hashFile } from "../../core/skill/file-hasher.js";
+import { buildApp } from "@clavion/core";
+import { signManifest, hashFile } from "@clavion/registry";
 import type { FastifyInstance } from "fastify";
-import type { SkillManifest } from "../../core/types.js";
+import type { SkillManifest } from "@clavion/types";
 
 const TEST_PRIVATE_KEY =
   "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80" as const;

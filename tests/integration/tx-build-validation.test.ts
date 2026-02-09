@@ -2,10 +2,10 @@ import { describe, test, expect, beforeAll, afterAll } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildApp } from "../../core/api/app.js";
-import { validFixtures, invalidFixtures } from "../../spec/fixtures/index.js";
+import { buildApp } from "@clavion/core";
+import { validFixtures, invalidFixtures } from "../../tools/fixtures/index.js";
 import type { FastifyInstance } from "fastify";
-import type { PolicyConfig } from "../../core/types.js";
+import type { PolicyConfig } from "@clavion/types";
 
 function permissiveConfig(): PolicyConfig {
   return {

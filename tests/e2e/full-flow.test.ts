@@ -4,12 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { keccak256, encodePacked, toHex, pad } from "viem";
 import { isAnvilAvailable, startAnvilFork, type AnvilFork } from "../helpers/anvil-fork.js";
-import { ViemRpcClient } from "../../core/rpc/viem-rpc-client.js";
-import { buildApp } from "../../core/api/app.js";
-import { EncryptedKeystore } from "../../core/wallet/keystore.js";
+import { ViemRpcClient, buildApp } from "@clavion/core";
+import { EncryptedKeystore } from "@clavion/signer";
 import type { FastifyInstance } from "fastify";
-import type { PolicyConfig, TxIntent, AuditEvent } from "../../core/types.js";
-import type { AuditTraceService } from "../../core/audit/audit-trace-service.js";
+import type { PolicyConfig, TxIntent, AuditEvent } from "@clavion/types";
+import type { AuditTraceService } from "@clavion/audit";
 
 // ─── Configuration ──────────────────────────────────────────────────────────
 

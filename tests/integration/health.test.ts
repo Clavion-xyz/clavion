@@ -2,7 +2,7 @@ import { describe, test, expect, beforeAll, afterAll } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildApp } from "../../core/api/app.js";
+import { buildApp } from "@clavion/core";
 import type { FastifyInstance } from "fastify";
 
 describe("GET /v1/health", () => {

@@ -2,14 +2,13 @@ import { describe, test, expect, beforeAll, afterAll } from "vitest";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { buildApp } from "../../core/api/app.js";
-import { PreflightService } from "../../core/preflight/preflight-service.js";
-import { buildFromIntent } from "../../core/tx/builders/index.js";
-import { EncryptedKeystore } from "../../core/wallet/keystore.js";
-import { validFixtures } from "../../spec/fixtures/index.js";
+import { buildApp, buildFromIntent } from "@clavion/core";
+import { PreflightService } from "@clavion/preflight";
+import { EncryptedKeystore } from "@clavion/signer";
+import { validFixtures } from "../../tools/fixtures/index.js";
 import type { FastifyInstance } from "fastify";
-import type { PolicyConfig, TxIntent } from "../../core/types.js";
-import type { RpcClient, CallResult } from "../../core/rpc/rpc-client.js";
+import type { PolicyConfig, TxIntent } from "@clavion/types";
+import type { RpcClient, CallResult } from "@clavion/types/rpc";
 
 function permissiveConfig(overrides?: Partial<PolicyConfig>): PolicyConfig {
   return {

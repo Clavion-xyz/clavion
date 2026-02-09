@@ -4,9 +4,9 @@ import { resolve } from "node:path";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { isDockerAvailable } from "../helpers/docker-check.js";
-import { DockerSandboxRunner } from "../../sandbox/sandbox-runner.js";
-import { AuditTraceService } from "../../core/audit/audit-trace-service.js";
-import type { SkillManifest } from "../../core/types.js";
+import { DockerSandboxRunner } from "@clavion/sandbox";
+import { AuditTraceService } from "@clavion/audit";
+import type { SkillManifest } from "@clavion/types";
 
 const dockerAvailable = await isDockerAvailable();
 
@@ -280,4 +280,4 @@ describe.skipIf(!dockerAvailable)("Sandbox Isolation — C1–C4", () => {
 
 // Need this import for join in beforeAll
 import { join } from "node:path";
-import type { SkillOutput } from "../../core/types.js";
+import type { SkillOutput } from "@clavion/types";
