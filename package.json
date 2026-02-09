@@ -11,11 +11,11 @@
     "packages/*"
   ],
   "scripts": {
-    "build": "tsc",
-    "start": "node dist/core/main.js",
-    "dev": "tsx core/main.ts",
+    "build": "tsc -b",
+    "start": "node packages/core/dist/main.js",
+    "dev": "tsx packages/core/src/main.ts",
     "test": "vitest run",
-    "test:unit": "vitest run tests/unit",
+    "test:unit": "vitest run packages/*/test",
     "test:integration": "vitest run tests/integration",
     "test:security": "vitest run tests/security",
     "test:e2e": "vitest run tests/e2e",
@@ -23,17 +23,7 @@
     "lint": "eslint .",
     "format": "prettier --write '**/*.{ts,json,md,yaml}'",
     "format:check": "prettier --check '**/*.{ts,json,md,yaml}'",
-    "generate:hashes": "tsx spec/fixtures/generate-hashes.ts"
-  },
-  "dependencies": {
-    "ajv": "^8.17.1",
-    "ajv-formats": "^3.0.1",
-    "better-sqlite3": "^11.10.0",
-    "canonicalize": "^2.1.0",
-    "fastify": "^5.7.4",
-    "pino": "^9.14.0",
-    "uuid": "^10.0.0",
-    "viem": "^2.45.1"
+    "generate:hashes": "tsx tools/fixtures/generate-hashes.ts"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",

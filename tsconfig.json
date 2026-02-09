@@ -20,6 +20,11 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["core/**/*.ts", "spec/**/*.ts", "tests/**/*.ts", "sandbox/**/*.ts", "adapter/**/*.ts"],
-  "exclude": ["node_modules", "dist", "packages"]
+  "include": [
+    "packages/*/src/**/*.ts",
+    "packages/*/test/**/*.ts",
+    "tests/**/*.ts",
+    "tools/**/*.ts"
+  ],
+  "exclude": ["node_modules", "dist"]
 }
