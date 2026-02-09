@@ -1,3 +1,3 @@
-export { evaluate } from "./policy-engine.js";
-export type { EvaluateOptions } from "./policy-engine.js";
-export { getDefaultConfig, loadPolicyConfig, PolicyConfigSchema } from "./policy-config.js";
+// Shim: re-exports from @clavion/policy for backward compatibility during migration
+export { evaluate, getDefaultConfig, loadPolicyConfig, PolicyConfigSchema } from "@clavion/policy";
+export type { EvaluateOptions } from "@clavion/policy";

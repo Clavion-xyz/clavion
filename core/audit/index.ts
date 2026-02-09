@@ -1,1 +1,2 @@
-export { AuditTraceService } from "./audit-trace-service.js";
+// Shim: re-exports from @clavion/audit for backward compatibility during migration
+export { AuditTraceService } from "@clavion/audit";

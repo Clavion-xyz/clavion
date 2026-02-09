@@ -1,9 +1,9 @@
-export { validateManifest } from "./manifest-validator.js";
-export type { ValidationResult } from "./manifest-validator.js";
+export { validateManifest } from "@clavion/registry";
+export type { ValidationResult } from "@clavion/registry";
 export {
   computeManifestHash,
   signManifest,
   verifyManifest,
-} from "./manifest-signer.js";
-export { hashFile, verifyFileHashes } from "./file-hasher.js";
-export { scanFiles } from "./static-scanner.js";
+} from "@clavion/registry";
+export { hashFile, verifyFileHashes } from "@clavion/registry";
+export { scanFiles } from "@clavion/registry";
