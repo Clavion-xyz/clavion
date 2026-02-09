@@ -1,4 +1,5 @@
-export { ISCLClient, ISCLError } from "./shared/index.js";
+// Shim: re-exports from @clavion/adapter-openclaw for backward compatibility during migration
+export { ISCLClient, ISCLError } from "@clavion/adapter-openclaw";
 export type {
   ISCLClientOptions,
   HealthResponse,
@@ -8,24 +9,26 @@ export type {
   SignAndSendResponse,
   BalanceResponse,
   TxReceiptResponse,
-} from "./shared/index.js";
+} from "@clavion/adapter-openclaw";
 export {
   handleTransfer,
+  handleTransferNative,
   handleApprove,
   handleSwap,
   handleBalance,
   buildIntent,
-} from "./skills/index.js";
+} from "@clavion/adapter-openclaw";
 export type {
   IntentBuilderOptions,
   AssetParam,
   BaseSkillParams,
   TransferParams,
+  TransferNativeParams,
   ApproveParams,
   SwapParams,
   BalanceParams,
   SkillResult,
-} from "./skills/index.js";
-export { verifyInstallation } from "./install.js";
-export { openclawTools, executeOpenClawTool } from "./openclaw-agent.js";
-export type { ToolDefinition } from "./openclaw-agent.js";
+} from "@clavion/adapter-openclaw";
+export { verifyInstallation } from "@clavion/adapter-openclaw";
+export { openclawTools, executeOpenClawTool } from "@clavion/adapter-openclaw";
+export type { ToolDefinition } from "@clavion/adapter-openclaw";

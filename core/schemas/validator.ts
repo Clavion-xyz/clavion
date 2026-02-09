@@ -1,28 +1,3 @@
-import { createRequire } from "node:module";
-import { Ajv, type ErrorObject } from "ajv";
-import { TxIntentSchema } from "../../spec/schemas/txintent-schema.js";
-
-const require = createRequire(import.meta.url);
-const addFormats = require("ajv-formats") as (ajv: Ajv) => void;
-
-const ajv = new Ajv({ strict: true, allErrors: true });
-addFormats(ajv);
-
-const validateTxIntentFn = ajv.compile(TxIntentSchema);
-
-export interface ValidationResult {
-  valid: boolean;
-  errors: Array<{ path: string; message: string }> | null;
-}
-
-export function validateTxIntent(data: unknown): ValidationResult {
-  const valid = validateTxIntentFn(data);
-  if (valid) {
-    return { valid: true, errors: null };
-  }
-  const errors = (validateTxIntentFn.errors ?? []).map((e: ErrorObject) => ({
-    path: e.instancePath || "/",
-    message: e.message ?? "unknown validation error",
-  }));
-  return { valid: false, errors };
-}
+// Shim: re-exports from @clavion/core for backward compatibility during migration
+export { validateTxIntent } from "@clavion/core";
+export type { ValidationResult } from "@clavion/core";

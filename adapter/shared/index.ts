@@ -1,4 +1,5 @@
-export { ISCLClient, ISCLError } from "./iscl-client.js";
+// Shim: re-exports from @clavion/adapter-openclaw for backward compatibility during migration
+export { ISCLClient, ISCLError } from "@clavion/adapter-openclaw";
 export type {
   ISCLClientOptions,
   HealthResponse,
@@ -8,4 +9,4 @@ export type {
   SignAndSendResponse,
   BalanceResponse,
   TxReceiptResponse,
-} from "./iscl-client.js";
+} from "@clavion/adapter-openclaw";
