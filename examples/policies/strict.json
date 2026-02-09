@@ -1,0 +1,20 @@
+{
+  "$comment": "Strict production policy — require approval for all transactions, limited to Base chain, conservative limits",
+  "maxValueWei": "100000000000000000000",
+  "allowedChains": [8453],
+  "allowedRecipients": [],
+  "allowedContracts": [
+    "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    "0x4200000000000000000000000000000000000006"
+  ],
+  "allowedTokens": [
+    "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    "0x4200000000000000000000000000000000000006"
+  ],
+  "maxRiskScore": 50,
+  "requireApprovalAbove": {
+    "valueWei": "0",
+    "riskScore": 0
+  },
+  "maxTxPerHour": 5
+}

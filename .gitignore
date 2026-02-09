@@ -10,3 +10,7 @@ dist/
 *.sqlite-shm
 coverage/
 .DS_Store
+
+# Excluded directories
+archive/
+iscl-claude-code-skills/

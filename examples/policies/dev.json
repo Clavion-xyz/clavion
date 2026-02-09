@@ -1,0 +1,14 @@
+{
+  "$comment": "Permissive dev/testing policy — auto-allow most transactions, high limits",
+  "maxValueWei": "1000000000000000000000",
+  "allowedChains": [8453, 84532, 1, 11155111],
+  "allowedRecipients": [],
+  "allowedContracts": [],
+  "allowedTokens": [],
+  "maxRiskScore": 80,
+  "requireApprovalAbove": {
+    "valueWei": "10000000000000000000",
+    "riskScore": 60
+  },
+  "maxTxPerHour": 50
+}
