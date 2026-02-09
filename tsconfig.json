@@ -26,5 +26,18 @@
     "tests/**/*.ts",
     "tools/**/*.ts"
   ],
-  "exclude": ["node_modules", "dist"]
+  "exclude": ["node_modules", "dist"],
+  "references": [
+    { "path": "packages/types" },
+    { "path": "packages/audit" },
+    { "path": "packages/policy" },
+    { "path": "packages/signer" },
+    { "path": "packages/preflight" },
+    { "path": "packages/registry" },
+    { "path": "packages/sandbox" },
+    { "path": "packages/core" },
+    { "path": "packages/adapter-openclaw" },
+    { "path": "packages/sdk" },
+    { "path": "packages/cli" }
+  ]
 }
