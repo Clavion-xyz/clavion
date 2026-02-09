@@ -1,0 +1,2 @@
+FROM alpine:3.19
+CMD ["sh", "-c", "touch /test-write 2>&1 && echo 'FS_WRITE_OK' || echo 'FS_WRITE_BLOCKED'"]

@@ -1,0 +1,48 @@
+{
+  "name": "iscl",
+  "version": "0.1.0",
+  "description": "Independent Secure Crypto Layer — secure runtime for AI agent crypto operations",
+  "type": "module",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "main": "./dist/core/main.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/core/main.js",
+    "dev": "tsx core/main.ts",
+    "test": "vitest run",
+    "test:unit": "vitest run tests/unit",
+    "test:integration": "vitest run tests/integration",
+    "test:security": "vitest run tests/security",
+    "test:e2e": "vitest run tests/e2e",
+    "test:watch": "vitest",
+    "lint": "eslint .",
+    "format": "prettier --write '**/*.{ts,json,md,yaml}'",
+    "format:check": "prettier --check '**/*.{ts,json,md,yaml}'",
+    "generate:hashes": "tsx spec/fixtures/generate-hashes.ts"
+  },
+  "dependencies": {
+    "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1",
+    "better-sqlite3": "^11.10.0",
+    "canonicalize": "^2.1.0",
+    "fastify": "^5.7.4",
+    "pino": "^9.14.0",
+    "uuid": "^10.0.0",
+    "viem": "^2.45.1"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^20.19.32",
+    "@types/uuid": "^10.0.0",
+    "@typescript-eslint/eslint-plugin": "^8.54.0",
+    "@typescript-eslint/parser": "^8.54.0",
+    "eslint": "^9.39.2",
+    "eslint-config-prettier": "^9.1.2",
+    "prettier": "^3.8.1",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3",
+    "vitest": "^2.1.9"
+  }
+}

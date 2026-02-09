@@ -1,0 +1,3 @@
+FROM alpine:3.19
+RUN apk add --no-cache curl
+CMD ["sh", "-c", "curl -s --connect-timeout 3 http://1.1.1.1 2>&1 || echo 'NETWORK_BLOCKED'"]

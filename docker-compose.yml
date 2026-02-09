@@ -1,0 +1,60 @@
+services:
+  iscl-core:
+    build: .
+    command: ["node", "dist/core/demo-boot.js"]
+    ports:
+      - "3100:3100"
+    environment:
+      - ISCL_HOST=0.0.0.0
+      - ISCL_PORT=3100
+      - BASE_RPC_URL=http://anvil:8545
+      - ISCL_AUTO_APPROVE=true
+      - ISCL_DEMO_PASSPHRASE=test-passphrase-123
+    volumes:
+      - keystore-data:/home/iscl/.iscl/keystore
+      - audit-data:/home/iscl/.iscl/data
+    depends_on:
+      anvil:
+        condition: service_started
+    # stdin must be open so the operator can approve transactions
+    stdin_open: true
+    tty: true
+    restart: unless-stopped
+
+  anvil:
+    image: ghcr.io/foundry-rs/foundry:latest
+    entrypoint: ["anvil"]
+    command:
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8545"
+      - "--fork-url"
+      - "${BASE_FORK_RPC_URL:-https://mainnet.base.org}"
+      - "--chain-id"
+      - "8453"
+    ports:
+      - "8545:8545"
+
+  openclaw:
+    image: alpine/openclaw
+    ports:
+      - "18789:18789"
+    environment:
+      - ISCL_API_URL=http://iscl-core:3100
+    volumes:
+      - openclaw-config:/home/node/.openclaw
+      - ./openclaw-skills:/home/node/.openclaw/skills:ro
+      # NO keystore mount — Domain A isolation enforced
+    depends_on:
+      iscl-core:
+        condition: service_started
+    stdin_open: true
+    tty: true
+    profiles:
+      - demo
+
+volumes:
+  keystore-data:
+  audit-data:
+  openclaw-config:

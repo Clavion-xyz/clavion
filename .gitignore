@@ -1,0 +1,12 @@
+node_modules/
+dist/
+*.js.map
+*.tsbuildinfo
+.env
+.env.*
+*.sqlite
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+coverage/
+.DS_Store

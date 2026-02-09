@@ -1,0 +1,11 @@
+node_modules
+dist
+.git
+tests
+*.sqlite*
+.claude
+.github
+doc
+iscl-claude-code-skills
+*.md
+!package.json

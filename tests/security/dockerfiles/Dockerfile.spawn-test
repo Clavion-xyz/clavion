@@ -1,0 +1,2 @@
+FROM alpine:3.19
+CMD ["sh", "-c", "echo 'STARTED'; ls / 2>&1 && echo 'SPAWN_OK' || echo 'SPAWN_BLOCKED'"]
