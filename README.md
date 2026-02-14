@@ -110,18 +110,26 @@ Clavion is organized as a monorepo with the following packages:
 
 ## Quick Start
 
-### Prerequisites
-
-- Node.js 20+
-- Docker (for sandbox and security tests)
-
-### Install and Build
+### One-Line Install
 
 ```bash
-# Install dependencies
-npm install
+curl -fsSL https://clavion.xyz/install.sh | bash
+```
 
-# Build all packages
+### Or with Docker
+
+```bash
+docker compose up -d clavion
+```
+
+### From Source
+
+Prerequisites: Node.js 20+, Docker (for sandbox and security tests)
+
+```bash
+git clone https://github.com/clavion-xyz/clavion.git
+cd clavion
+npm install
 npm run build
 ```
 

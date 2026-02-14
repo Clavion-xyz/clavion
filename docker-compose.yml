@@ -1,0 +1,44 @@
+# Quick start: docker compose up -d clavion
+# Full demo stack with Anvil: docker compose --profile demo up -d
+
+services:
+  clavion:
+    image: ghcr.io/clavion-xyz/clavion:latest
+    ports:
+      - "3100:3100"
+    environment:
+      - ISCL_HOST=0.0.0.0
+      - ISCL_PORT=3100
+      - ISCL_RPC_URL=${ISCL_RPC_URL:-}
+      - ISCL_APPROVAL_MODE=${ISCL_APPROVAL_MODE:-web}
+    volumes:
+      - keystore-data:/home/iscl/.iscl/keystore
+      - audit-data:/home/iscl/.iscl/data
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 1G
+
+  # Optional: local Anvil fork for testing
+  anvil:
+    image: ghcr.io/foundry-rs/foundry:latest
+    entrypoint: ["anvil"]
+    command:
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8545"
+      - "--fork-url"
+      - "${BASE_FORK_RPC_URL:-https://mainnet.base.org}"
+      - "--chain-id"
+      - "8453"
+    ports:
+      - "8545:8545"
+    profiles:
+      - demo
+
+volumes:
+  keystore-data:
+  audit-data:
