@@ -15,6 +15,19 @@ export function createSkillRoutes(services: SkillRouteServices) {
     // POST /v1/skills/register
     app.post<{ Body: { manifest: SkillManifest; basePath: string } }>(
       "/v1/skills/register",
+      {
+        schema: {
+          body: {
+            type: "object",
+            required: ["manifest", "basePath"],
+            additionalProperties: false,
+            properties: {
+              manifest: { type: "object" },
+              basePath: { type: "string", minLength: 1 },
+            },
+          },
+        },
+      },
       async (request, reply) => {
         const { manifest, basePath } = request.body as {
           manifest: SkillManifest;

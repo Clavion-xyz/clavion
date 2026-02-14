@@ -1,0 +1,132 @@
+---
+title: CLI Reference
+description: Clavion CLI commands for key management -- import, generate, and list wallet keys.
+---
+
+## What you will learn
+
+- How to import an existing private key
+- How to import from a BIP-39 mnemonic
+- How to generate a new random key
+- How to list available keystore addresses
+
+## Overview
+
+The Clavion CLI (`clavion-cli`) manages the encrypted keystore that ISCL Core uses for transaction signing. Keys are encrypted at rest using scrypt + AES-256-GCM and stored in the keystore directory.
+
+```bash
+npx clavion-cli <command> [options]
+```
+
+## Commands
+
+### key import
+
+Import a private key from stdin. The key is encrypted and stored in the keystore.
+
+```bash
+echo "0xYourPrivateKeyHex" | npx clavion-cli key import
+```
+
+The CLI prompts for a passphrase to encrypt the key. In non-interactive environments, the passphrase can be provided via the `ISCL_DEMO_PASSPHRASE` environment variable.
+
+<Warning>
+Never pass private keys as command-line arguments -- they will appear in shell history and process listings. Always pipe from stdin or a file.
+</Warning>
+
+### key import-mnemonic
+
+Import a wallet from a BIP-39 mnemonic phrase. Derives the key using the standard Ethereum derivation path (`m/44'/60'/0'/0/0` by default).
+
+```bash
+echo "your twelve word mnemonic phrase goes here" | npx clavion-cli key import-mnemonic
+```
+
+Options:
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--account-index &lt;n&gt;` | `0` | BIP-44 account index |
+| `--address-index &lt;n&gt;` | `0` | BIP-44 address index |
+
+Example with custom derivation:
+
+```bash
+echo "your mnemonic..." | npx clavion-cli key import-mnemonic --account-index 0 --address-index 2
+```
+
+This derives from path `m/44'/60'/0'/0/2`.
+
+### key generate
+
+Generate a new random private key, encrypt it, and store it in the keystore.
+
+```bash
+npx clavion-cli key generate
+```
+
+Output:
+
+```text
+Generated new key
+Address: 0x1234567890abcdef1234567890abcdef12345678
+Stored in: /Users/you/.iscl/keystore/0x1234...5678.json
+```
+
+### key list
+
+List all addresses in the keystore.
+
+```bash
+npx clavion-cli key list
+```
+
+Output:
+
+```text
+Keystore: /Users/you/.iscl/keystore
+Addresses:
+  0x1234567890abcdef1234567890abcdef12345678
+  0xabcdef1234567890abcdef1234567890abcdef12
+```
+
+## Global options
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--keystore-path &lt;dir&gt;` | `~/.iscl/keystore` | Directory for encrypted keystore files |
+
+Example:
+
+```bash
+npx clavion-cli key list --keystore-path /custom/path/keystore
+```
+
+## Keystore format
+
+Keys are stored as individual JSON files named by address (e.g., `0x1234...5678.json`). Each file contains:
+
+- **Encrypted private key** (AES-256-GCM)
+- **Scrypt parameters** (salt, N, r, p)
+- **IV and auth tag** for authenticated decryption
+
+The keystore format is designed for ISCL only -- it is not compatible with Ethereum keystore v3 (used by Geth/Clef).
+
+## Verification
+
+After importing or generating a key, verify it:
+
+```bash
+# List keys
+npx clavion-cli key list
+
+# Start ISCL Core and check that signing works
+npm run dev
+# Then submit a TxIntent -- signing should succeed
+```
+
+## Next steps
+
+- [Quick Start](/start/quickstart) -- Use the imported key to execute a transaction
+- [Demo Flow](/start/demo-flow) -- Complete transaction lifecycle walkthrough
+- [Configuration](/reference/config-reference) -- Keystore path and passphrase settings

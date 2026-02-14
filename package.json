@@ -3,6 +3,15 @@
   "version": "0.1.0",
   "private": true,
   "description": "Secure crypto runtime for autonomous agents",
+  "author": "Dmitri N",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/clavion-xyz/clavion.git"
+  },
+  "homepage": "https://github.com/clavion-xyz/clavion",
+  "bugs": "https://github.com/clavion-xyz/clavion/issues",
+  "keywords": ["crypto", "blockchain", "ethereum", "ai-agents", "security", "defi", "autonomous-agents", "iscl"],
   "type": "module",
   "engines": {
     "node": ">=20.0.0"

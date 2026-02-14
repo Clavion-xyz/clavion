@@ -1,41 +1,22 @@
 import { describe, test, expect } from "vitest";
 import { PreflightService } from "@clavion/preflight";
 import { buildTransfer, buildTransferNative, buildApprove, buildSwap } from "@clavion/core";
-import { validFixtures } from "../../../tools/fixtures/index.js";
+import {
+  validFixtures,
+  mockRpcClient as baseMockRpc,
+  noApprovalConfig,
+} from "../../../tools/fixtures/index.js";
 import type { RpcClient } from "@clavion/types/rpc";
-import type { PolicyConfig } from "@clavion/types";
 
-function permissiveConfig(): PolicyConfig {
-  return {
-    version: "1",
-    maxValueWei: "1000000000000000000000",
-    maxApprovalAmount: "1000000000000000000000",
-    contractAllowlist: ["0x2626664c2603336E57B271c5C0b26F421741e481"],
-    tokenAllowlist: [
-      "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-      "0x4200000000000000000000000000000000000006",
-    ],
-    allowedChains: [8453],
-    recipientAllowlist: [],
-    maxRiskScore: 70,
-    requireApprovalAbove: { valueWei: "10000000000000000000" },
-    maxTxPerHour: 100,
-  };
+function permissiveConfig() {
+  return noApprovalConfig({ requireApprovalAbove: { valueWei: "10000000000000000000" } });
 }
 
 function mockRpcClient(overrides?: Partial<RpcClient>): RpcClient {
-  return {
-    call: async () => ({ success: true, returnData: "0x" as `0x${string}` }),
-    estimateGas: async () => 50_000n,
-    readBalance: async () => 10_000_000n,
+  return baseMockRpc({
     readNativeBalance: async () => 1_000_000_000_000_000_000n,
-    readAllowance: async () => 0n,
-    getTransactionReceipt: async () => null,
-    sendRawTransaction: async () => "0x" as `0x${string}`,
-    getTransactionCount: async () => 0,
-    estimateFeesPerGas: async () => ({ maxFeePerGas: 1_000_000_000n, maxPriorityFeePerGas: 1_000_000_000n }),
     ...overrides,
-  };
+  });
 }
 
 describe("PreflightService", () => {

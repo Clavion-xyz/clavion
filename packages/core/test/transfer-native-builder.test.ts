@@ -48,8 +48,8 @@ describe("buildTransferNative", () => {
     expect(plan.txRequest.value).toBe(1_000_000_000_000_000_000_000n);
   });
 
-  test("buildFromIntent dispatches to buildTransferNative", () => {
-    const plan = buildFromIntent(validFixtures.transferNative);
+  test("buildFromIntent dispatches to buildTransferNative", async () => {
+    const plan = await buildFromIntent(validFixtures.transferNative);
     expect(plan.intentId).toBe(validFixtures.transferNative.id);
     expect(plan.txRequest.data).toBe("0x");
     expect(plan.txRequest.value).toBe(100_000_000_000_000_000n);

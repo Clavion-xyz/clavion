@@ -1,0 +1,80 @@
+---
+title: Building agents
+description: Connect AI agent frameworks to Clavion for secure crypto operations.
+icon: robot
+---
+
+Clavion provides adapters for four AI agent frameworks. Each adapter is a Domain A component that constructs `TxIntent` objects and calls ISCL Core over HTTP. The adapter never sees private keys, never signs transactions, and never contacts the blockchain directly.
+
+## Supported frameworks
+
+<CardGroup cols={2}>
+  <Card title="MCP (Claude Desktop / Cursor)" icon="plug" href="/guides/mcp-setup">
+    6 tools for Claude Desktop, Cursor, and other MCP-compatible IDEs. Ask Claude to send tokens, swap, or check balances.
+  </Card>
+  <Card title="ElizaOS (ai16z)" icon="robot" href="/guides/eliza-setup">
+    5 actions replacing `@elizaos/plugin-evm`. Natural language crypto operations with policy-enforced signing.
+  </Card>
+  <Card title="Telegram Bot" icon="paper-plane" href="/guides/telegram-setup">
+    Chat-based crypto operations with inline approval keyboards. Same-sender enforcement and chat allowlisting.
+  </Card>
+  <Card title="OpenClaw" icon="gear" href="/guides/integrating-openclaw">
+    Thin skill wrappers for OpenClaw's runtime. Build, preflight, and approve via ISCL Core.
+  </Card>
+</CardGroup>
+
+## How adapters work
+
+Every adapter follows the same two-step pipeline for fund-affecting operations:
+
+<Steps>
+  <Step title="Approve request">
+    The adapter constructs a `TxIntent` and calls `POST /v1/tx/approve-request`. ISCL Core evaluates policy, runs preflight simulation, and prompts the user for approval. This call blocks until the user approves or denies.
+  </Step>
+  <Step title="Sign and send">
+    If approved, the adapter calls `POST /v1/tx/sign-and-send` with the single-use approval token. ISCL Core verifies the token, signs the transaction, and broadcasts it to the blockchain.
+  </Step>
+</Steps>
+
+Read-only operations (balance lookups, transaction receipt queries) call the API directly without the approval pipeline.
+
+## Choosing an approval mode
+
+The approval mode determines how the user confirms transactions. Set `ISCL_APPROVAL_MODE` on ISCL Core:
+
+| Mode | Behavior | Best for |
+|------|----------|----------|
+| `cli` | Readline prompt in the ISCL Core terminal | Development, single-user CLI workflows |
+| `web` | Pending requests appear on the web dashboard at `/approval-ui` | MCP, Telegram, multi-tool setups |
+| `auto` | Auto-approved without human confirmation | Testing only |
+
+<Warning>
+Never use `auto` mode in production. It bypasses human confirmation entirely.
+</Warning>
+
+<Tip>
+For MCP and Telegram, use `ISCL_APPROVAL_MODE=web` so approval happens through the dashboard or bot UI rather than the terminal.
+</Tip>
+
+## Security model
+
+All adapters are Domain A (untrusted). They satisfy these invariants:
+
+- **No key access.** Adapters never see private keys. They only know the wallet address.
+- **Full pipeline enforcement.** Every transaction goes through policy evaluation, preflight simulation, and user approval.
+- **No direct blockchain access.** All RPC calls are mediated by ISCL Core in Domain B.
+- **No raw calldata.** Adapters construct declarative `TxIntent` objects. ISCL Core builds the actual transaction.
+- **Audit trail.** All operations are logged with the adapter's `source` identifier for traceability.
+
+## Build your own
+
+Need an adapter for a different framework? See the [custom adapter tutorial](/guides/custom-adapter) for a step-by-step guide covering the `ISCLClient`, intent builder, pipeline function, and framework integration patterns for MCP, ElizaOS, Telegram, and OpenClaw.
+
+## Next steps
+
+- [MCP adapter setup](/guides/mcp-setup) -- Connect Claude Desktop or Cursor
+- [ElizaOS plugin setup](/guides/eliza-setup) -- Replace plugin-evm with Clavion
+- [Telegram bot setup](/guides/telegram-setup) -- Chat-based crypto with inline approval
+- [Custom adapter tutorial](/guides/custom-adapter) -- Build an adapter for any framework
+- [Approval model](/concepts/approval-model) -- How the approval flow works
+- [Configuration](/reference/config-reference) -- All environment variables

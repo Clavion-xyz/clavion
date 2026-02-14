@@ -1,0 +1,57 @@
+---
+title: Welcome to Clavion
+description: A local secure runtime that enables AI agents to safely perform crypto operations while isolating private keys from untrusted agent code.
+---
+
+## What is Clavion?
+
+Clavion (ISCL -- Independent Secure Crypto Layer) is a local runtime that lets AI agents sign Ethereum transactions without ever touching private keys. It sits between your agent framework and the blockchain, enforcing policy checks, risk scoring, and human approval before any funds move.
+
+## Why Clavion exists
+
+AI agents need to perform crypto operations: token transfers, DEX swaps, spending approvals. Existing approaches all fail:
+
+- **Agent holds keys directly** -- one prompt injection drains the wallet
+- **Hardware wallet** -- requires physical interaction, incompatible with autonomous workflows
+- **Custodial API** -- counterparty risk, not self-custody
+- **TEE / secure enclave** -- hardware-dependent, doesn't solve policy or approval
+
+Clavion solves this by isolating keys in a separate trusted process. Agents express *intent* ("transfer 100 USDC to 0xAlice"); Clavion handles transaction construction, policy evaluation, simulation, approval, signing, and broadcast.
+
+## What you will learn
+
+<CardGroup cols={2}>
+  <Card title="Installation" icon="download" href="/start/installation">
+    System requirements and setup
+  </Card>
+  <Card title="Quick Start" icon="bolt" href="/start/quickstart">
+    Run your first transaction in 10 minutes
+  </Card>
+  <Card title="CLI Reference" icon="terminal" href="/start/cli">
+    Key management commands
+  </Card>
+  <Card title="Demo Flow" icon="play" href="/start/demo-flow">
+    Walk through a complete transaction
+  </Card>
+</CardGroup>
+
+## Supported integrations
+
+Clavion works with any agent framework through adapters:
+
+| Framework | Package | Status |
+|-----------|---------|--------|
+| OpenClaw | `@clavion/adapter-openclaw` | Production |
+| Claude Desktop / Cursor (MCP) | `@clavion/adapter-mcp` | Production |
+| ElizaOS (ai16z) | `@clavion/plugin-eliza` | Production |
+| Telegram | `@clavion/adapter-telegram` | Production |
+| Custom agents | REST API (`localhost:3100`) | Production |
+
+## Supported chains
+
+| Chain | ID | Status |
+|-------|----|--------|
+| Ethereum | 1 | Supported |
+| Optimism | 10 | Supported |
+| Arbitrum | 42161 | Supported |
+| Base | 8453 | Supported (default) |

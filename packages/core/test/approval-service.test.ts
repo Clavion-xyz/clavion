@@ -1,10 +1,8 @@
 import { describe, test, expect, beforeEach, afterEach } from "vitest";
 import { ApprovalTokenManager, ApprovalService } from "@clavion/core";
 import { AuditTraceService } from "@clavion/audit";
+import { INTENT_ID, TX_REQUEST_HASH } from "../../../tools/fixtures/index.js";
 import type { ApprovalSummary } from "@clavion/types";
-
-const INTENT_ID = "550e8400-e29b-41d4-a716-446655440000";
-const TX_REQUEST_HASH = "0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890";
 
 function makeSummary(overrides: Partial<ApprovalSummary> = {}): ApprovalSummary {
   return {
@@ -60,8 +58,8 @@ describe("ApprovalService", () => {
     const service = new ApprovalService(tokenManager, auditTrace, async () => true);
     const result = await service.requestApproval(makeSummary());
 
-    const isValid = tokenManager.validate(result.token!.id, INTENT_ID, TX_REQUEST_HASH);
-    expect(isValid).toBe(true);
+    const check = tokenManager.validate(result.token!.id, INTENT_ID, TX_REQUEST_HASH);
+    expect(check).toEqual({ valid: true });
   });
 
   test("approval_granted event logged on approval", async () => {

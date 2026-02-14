@@ -20,7 +20,7 @@ We as members, contributors, and leaders pledge to make participation in our com
 
 ## Enforcement
 
-Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to the project maintainers at **conduct@clavion.xyz**. All complaints will be reviewed and investigated and will result in a response that is deemed necessary and appropriate to the circumstances.
+Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to the project maintainers at **Clavion.xyz@proton.me**. All complaints will be reviewed and investigated and will result in a response that is deemed necessary and appropriate to the circumstances.
 
 ## Attribution
 

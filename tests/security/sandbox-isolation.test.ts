@@ -181,7 +181,7 @@ describe.skipIf(!dockerAvailable)("Sandbox Isolation — C1–C4", () => {
     await runner.run({
       skillName: "audit-test",
       manifest,
-      apiUrl: "http://127.0.0.1:3000",
+      apiUrl: "http://127.0.0.1:3100",
     });
 
     const events = auditTrace.getTrail("sandbox");

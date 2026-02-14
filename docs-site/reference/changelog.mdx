@@ -1,0 +1,268 @@
+---
+title: "Changelog"
+description: "Release history and notable changes"
+icon: "clock-rotate-left"
+---
+
+All notable changes to the Clavion / ISCL project are documented here.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+---
+
+## [Unreleased]
+
+### Planned
+
+- Rootless Podman support for the sandbox executor (`@clavion/sandbox`)
+- CI/CD pipeline via GitHub Actions
+- SDK package (`@clavion/sdk`) -- currently a stub placeholder
+
+---
+
+## [0.1.0] - 2025-02-10
+
+Initial release of the ISCL (Independent Secure Crypto Layer) runtime.
+15 packages across 3 trust domains, 639+ tests passing, full transaction
+pipeline verified end-to-end with Anvil fork.
+
+### Added
+
+<Accordion title="Core Runtime (@clavion/core)">
+
+- Fastify-based HTTP API server with 14 endpoints under `/v1/`
+- JSON Schema validation via AJV in strict mode (`additionalProperties: false`)
+- Structured logging with pino
+- Health endpoint (`GET /v1/health`) reporting version, uptime, and status
+- `X-ISCL-Version` response header on all API responses
+- Demo boot script for local development (`demo-boot.ts`)
+
+</Accordion>
+
+<Accordion title="Transaction Engine">
+
+- TxIntent v1 schema supporting 5 action types: `transfer`, `transfer_native`, `approve`, `swap_exact_in`, `swap_exact_out`
+- Transaction builders for all 5 action types with per-action validation
+- JCS canonicalization + keccak256 hashing for intent integrity verification
+- Uniswap V3 swap routing with per-chain router addresses
+- 1inch DEX Aggregator integration (optional, enabled via `ONEINCH_API_KEY`):
+  - 1inch Swap API v6 for optimized multi-DEX routing
+  - Automatic silent fallback to Uniswap V3 on 1inch failure
+  - `swap_exact_out` always routed through Uniswap V3 (1inch API v6 limitation)
+  - Router address validation per chain before API calls
+  - Slippage conversion from basis points to percentage for 1inch API
+- Transaction broadcast with receipt tracking via `GET /v1/tx/:hash`
+- Async `buildFromIntent()` supporting both Uniswap and 1inch builders
+
+</Accordion>
+
+<Accordion title="Types & Schemas (@clavion/types)">
+
+- Shared TypeScript interfaces for TxIntent, TxPlan, PolicyDecision, ApprovalToken, SkillManifest, AuditEvent, and RPC types
+- JSON Schema definitions for all API request/response payloads
+- TxIntent schema with `$defs`/`$ref` for composable action validation
+
+</Accordion>
+
+<Accordion title="Encrypted Keystore & Signing (@clavion/signer)">
+
+- AES-256-GCM encrypted keystore with scrypt key derivation
+- WalletService for transaction signing (viem-based)
+- BIP-39 mnemonic import with configurable account and address indices
+- Random key generation
+
+</Accordion>
+
+<Accordion title="Policy Engine (@clavion/policy)">
+
+PolicyEngine with 8 configurable evaluation rules:
+
+1. Allowed chains whitelist
+2. Allowed tokens whitelist
+3. Allowed contracts whitelist
+4. Maximum transaction value threshold
+5. Approval-required-above value threshold
+6. Recipient allowlist/denylist
+7. Risk score ceiling
+8. Rate limiting (sliding window, configurable `maxTxPerHour`)
+
+Policy configuration validation with sensible defaults.
+
+</Accordion>
+
+<Accordion title="Preflight Simulation (@clavion/preflight)">
+
+- `eth_call` simulation against live or forked RPC
+- Gas estimation for built transactions
+- Balance diff tracking (before/after simulation)
+- Token allowance change detection
+- Risk scoring algorithm with 7 weighted factors (0--100 scale)
+- Chain-scoped RPC override support for multi-chain simulation
+
+</Accordion>
+
+<Accordion title="Approval System">
+
+Three approval modes controlled by `ISCL_APPROVAL_MODE` env var:
+
+| Mode | Description |
+|------|-------------|
+| `cli` | Readline-based terminal approval |
+| `web` | Browser-based approval dashboard |
+| `auto` | Automatic approval (testing/demos only) |
+
+Additional features:
+- `promptFn` option override for programmatic control in tests
+- Approval tokens: single-use, TTL-bound (300 seconds), intent-bound
+- `PendingApprovalStore`: in-memory store with deferred Promises and TTL cleanup
+- Web approval UI (`GET /approval-ui`): dark theme, zero external dependencies, 1-second pending poll, 5-second history poll, risk color coding
+- Approval API: `GET /v1/approvals/pending`, `POST /v1/approvals/:id/decide`, `GET /v1/approvals/history`
+
+</Accordion>
+
+<Accordion title="Audit Trail (@clavion/audit)">
+
+- Append-only SQLite audit log with WAL journal mode
+- 14 event types with `intentId` correlation across the full pipeline
+- Rate limit tracking in a dedicated table
+- Queryable recent events via `getRecentEvents(limit)` (API and direct access)
+
+</Accordion>
+
+<Accordion title="Skill Registry (@clavion/registry)">
+
+- SkillManifest v1 with ECDSA signing (JCS + keccak256)
+- 6-step registration pipeline: schema validation, signature verification, hash verification, static code scan, duplicate check, insert
+- Static scanner with 5 pattern rules: `eval`, `child_process`, network access, filesystem writes, obfuscation detection
+- CRUD API: `POST /v1/skills/register`, `GET /v1/skills`, `GET /v1/skills/:name`, `DELETE /v1/skills/:name`
+
+</Accordion>
+
+<Accordion title="Sandbox Executor (@clavion/sandbox)">
+
+- Docker-based container isolation runner
+- API-only communication with ISCL Core (no key access, no unrestricted network)
+- Domain C trust boundary enforcement
+
+</Accordion>
+
+<Accordion title="Multi-Chain Support">
+
+4 supported chains:
+
+| Chain | Chain ID |
+|-------|----------|
+| Ethereum | 1 |
+| Optimism | 10 |
+| Arbitrum | 42161 |
+| Base | 8453 |
+
+- `RpcRouter` implementing `RpcClient` interface with per-chain dispatch
+- `ISCL_RPC_URL_{chainId}` env vars with `BASE_RPC_URL` legacy fallback
+- Chain-scoped balance queries via `GET /v1/balance/:token/:account?chainId=N`
+- Single-URL backward compatibility (plain `ViemRpcClient` when one URL provided)
+
+</Accordion>
+
+<Accordion title="CLI (@clavion/cli)">
+
+4 key management commands:
+
+```bash
+clavion-cli key import             # Import private key from stdin
+clavion-cli key import-mnemonic    # Import from BIP-39 mnemonic via stdin
+clavion-cli key generate           # Generate a new random keypair
+clavion-cli key list               # List all keystore addresses
+```
+
+Options: `--keystore-path`, `--account-index`, `--address-index`
+
+</Accordion>
+
+<Accordion title="OpenClaw Adapter (@clavion/adapter-openclaw)">
+
+- Thin skill wrappers for OpenClaw execution backend
+- ISCLClient for HTTP communication with ISCL Core API
+- Skill types: `clavion-swap`, `clavion-transfer`, and others
+
+</Accordion>
+
+<Accordion title="MCP Adapter (@clavion/adapter-mcp)">
+
+- Model Context Protocol server for AI-native tool integration
+- Compatible with Claude Desktop, Cursor, and other MCP-enabled IDEs
+- Tool definitions for transfer, swap, balance, and approval operations
+
+</Accordion>
+
+<Accordion title="Eliza Plugin (@clavion/plugin-eliza)">
+
+- ElizaOS (ai16z) plugin with 5 actions
+- Service layer wrapping ISCLClient for ElizaOS runtime
+- `moduleResolution: "Bundler"` compatibility for `@elizaos/core`
+
+</Accordion>
+
+<Accordion title="Telegram Bot (@clavion/adapter-telegram)">
+
+- grammY-based Telegram bot with same-chat agent and approval flow
+- 7 commands: `/transfer`, `/send`, `/swap`, `/approve`, `/balance`, `/status`, `/help`
+- InlineKeyboard approval with callback query handling
+- `ActiveTransactionStore` for tracking in-flight approvals
+- Chat authorization via `ISCL_TELEGRAM_ALLOWED_CHATS` env var
+- Same-sender verification for approval callbacks
+- HTML parse mode for Ethereum address formatting
+
+</Accordion>
+
+<Accordion title="Docker & Deployment">
+
+- Multi-stage `Dockerfile.core` with non-root `iscl` user
+- Docker Compose with 3-service stack: Anvil, ISCL Core, OpenClaw
+- `demo` profile for full integration demonstration
+
+</Accordion>
+
+<Accordion title="Testing">
+
+- 639+ unit and integration tests via vitest
+- 6 end-to-end tests with Anvil Base fork (tokens actually move on-chain)
+- 8 sandbox security tests requiring Docker
+- Security test suite verifying all 3 trust domain boundaries
+- Full pipeline verified: OpenClaw skill -> ISCL API -> policy -> preflight -> approval -> sign -> broadcast -> Anvil receipt
+- Test fixture infrastructure in `tools/fixtures/` with hash generation
+- One valid fixture per action type plus invalid and edge-case variants
+
+</Accordion>
+
+### Security
+
+<Warning>
+The security architecture is a fundamental design constraint, not a feature that can be relaxed. All 6 invariants are enforced by both code structure and automated tests.
+</Warning>
+
+Three trust domain architecture enforced across all packages:
+
+<CardGroup cols={3}>
+  <Card title="Domain A (Untrusted)" icon="shield-halved">
+    Adapters and agent skills. No keys, no RPC, no signing.
+  </Card>
+  <Card title="Domain B (Trusted)" icon="shield">
+    Core, signer, audit, policy, preflight, registry. Keys and blockchain access.
+  </Card>
+  <Card title="Domain C (Limited Trust)" icon="shield-xmark">
+    Sandbox. No keys, API-only communication.
+  </Card>
+</CardGroup>
+
+**6 security invariants:**
+
+1. Private keys never leave Domain B (verified by security tests)
+2. No `signRaw` or arbitrary calldata signing -- all operations use TxIntent v1
+3. All signing requires both a PolicyDecision and a valid ApprovalToken
+4. Tampered package detection in the skill registry static scanner
+5. Approval tokens are cryptographically bound to specific intents
+6. Rate limiting prevents transaction flooding per wallet address
+
+Domain boundary integrity tests in `tests/security/` verify these invariants on every test run.

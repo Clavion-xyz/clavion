@@ -1,9 +1,11 @@
 import type { FastifyInstance } from "fastify";
 import { TxIntentSchema } from "@clavion/types/schemas";
 import { buildFromIntent } from "../../tx/builders/index.js";
+import type { OneInchClient } from "../../aggregator/oneinch-client.js";
 import { evaluate } from "@clavion/policy";
 import type {
   PolicyConfig,
+  PolicyDecision,
   TxIntent,
   BuildPlan,
   ApprovalSummary,
@@ -15,6 +17,7 @@ import type { WalletService } from "@clavion/signer";
 import type { ApprovalTokenManager } from "../../approval/approval-token-manager.js";
 import type { ApprovalService } from "../../approval/approval-service.js";
 import type { RpcClient } from "@clavion/types/rpc";
+import { resolveRpc } from "../../rpc/resolve-rpc.js";
 
 export interface TxRouteServices {
   policyConfig: PolicyConfig;
@@ -24,6 +27,7 @@ export interface TxRouteServices {
   approvalTokenManager: ApprovalTokenManager;
   approvalService: ApprovalService;
   rpcClient: RpcClient | null;
+  oneInchClient?: OneInchClient;
 }
 
 /** Serialize BuildPlan for JSON response — converts BigInt fields to strings. */
@@ -82,6 +86,10 @@ function buildApprovalSummary(
       actionStr = "swap_exact_out";
       expectedOutcome = `Swap max ${action.maxAmountIn} ${action.assetIn.symbol ?? action.assetIn.address} for ${action.amountOut} ${action.assetOut.symbol ?? action.assetOut.address}`;
       break;
+    default: {
+      const _exhaustive: never = action;
+      throw new Error(`Unknown action type: ${(_exhaustive as { type: string }).type}`);
+    }
   }
 
   return {
@@ -99,6 +107,29 @@ function buildApprovalSummary(
   };
 }
 
+const RATE_LIMIT_WINDOW_MS = 3_600_000; // 1 hour
+
+/** Evaluate policy with rate-limit context and record tick if not denied. */
+function evaluatePolicy(
+  intent: TxIntent,
+  policyConfig: PolicyConfig,
+  auditTrace: AuditTraceService,
+  extra?: { riskScore?: number },
+): PolicyDecision {
+  const recentTxCount = auditTrace.countRecentTxByWallet(
+    intent.wallet.address,
+    RATE_LIMIT_WINDOW_MS,
+  );
+  const decision = evaluate(intent, policyConfig, {
+    recentTxCount,
+    ...extra,
+  });
+  if (decision.decision !== "deny") {
+    auditTrace.recordRateLimitTick(intent.wallet.address);
+  }
+  return decision;
+}
+
 export function createTxRoutes(services: TxRouteServices) {
   return async function txRoutes(app: FastifyInstance): Promise<void> {
     const {
@@ -109,7 +140,9 @@ export function createTxRoutes(services: TxRouteServices) {
       approvalTokenManager,
       approvalService,
       rpcClient,
+      oneInchClient,
     } = services;
+    const builderDeps = { oneInchClient };
 
     // POST /v1/tx/build — Build transaction from TxIntent
     app.post("/v1/tx/build", {
@@ -119,12 +152,7 @@ export function createTxRoutes(services: TxRouteServices) {
       handler: async (request, reply) => {
         const intent = request.body as TxIntent;
 
-        // Policy check (with rate limit count)
-        const recentTxCount = auditTrace.countRecentTxByWallet(
-          intent.wallet.address,
-          3_600_000,
-        );
-        const decision = evaluate(intent, policyConfig, { recentTxCount });
+        const decision = evaluatePolicy(intent, policyConfig, auditTrace);
 
         auditTrace.log("policy_evaluated", {
           intentId: intent.id,
@@ -141,11 +169,8 @@ export function createTxRoutes(services: TxRouteServices) {
           });
         }
 
-        // Record rate limit tick (non-denied)
-        auditTrace.recordRateLimitTick(intent.wallet.address);
-
         // Build the transaction
-        const plan = buildFromIntent(intent);
+        const plan = await buildFromIntent(intent, builderDeps);
 
         auditTrace.log("tx_built", {
           intentId: intent.id,
@@ -168,15 +193,16 @@ export function createTxRoutes(services: TxRouteServices) {
       handler: async (request, reply) => {
         const intent = request.body as TxIntent;
 
-        if (!preflightService) {
+        const chainRpcForPreflight = resolveRpc(rpcClient, intent.chain.chainId);
+        if (!preflightService || !chainRpcForPreflight) {
           return reply.code(502).send({
             error: "no_rpc_client",
-            message: "PreflightService requires an RPC client, which is not configured.",
+            message: `PreflightService requires an RPC client for chain ${intent.chain.chainId}, which is not configured.`,
           });
         }
 
-        const plan = buildFromIntent(intent);
-        const result = await preflightService.simulate(intent, plan);
+        const plan = await buildFromIntent(intent, builderDeps);
+        const result = await preflightService.simulate(intent, plan, chainRpcForPreflight);
 
         auditTrace.log("preflight_completed", {
           intentId: intent.id,
@@ -198,7 +224,7 @@ export function createTxRoutes(services: TxRouteServices) {
         const intent = request.body as TxIntent;
 
         // Build the transaction
-        const plan = buildFromIntent(intent);
+        const plan = await buildFromIntent(intent, builderDeps);
 
         // Run preflight if available (to get risk score)
         let riskScore = 0;
@@ -207,8 +233,9 @@ export function createTxRoutes(services: TxRouteServices) {
         let gasEstimate = "0";
         let balanceDiffs: BalanceDiff[] = [];
 
-        if (preflightService) {
-          const preflight = await preflightService.simulate(intent, plan);
+        const chainRpcForApproval = resolveRpc(rpcClient, intent.chain.chainId);
+        if (preflightService && chainRpcForApproval) {
+          const preflight = await preflightService.simulate(intent, plan, chainRpcForApproval);
           riskScore = preflight.riskScore;
           riskReasons = preflight.riskReasons;
           warnings = preflight.warnings;
@@ -216,12 +243,8 @@ export function createTxRoutes(services: TxRouteServices) {
           balanceDiffs = preflight.balanceDiffs;
         }
 
-        // Policy check (with risk score from preflight + rate limit)
-        const recentTxCount = auditTrace.countRecentTxByWallet(
-          intent.wallet.address,
-          3_600_000,
-        );
-        const decision = evaluate(intent, policyConfig, { riskScore, recentTxCount });
+        // Policy check (with risk score from preflight)
+        const decision = evaluatePolicy(intent, policyConfig, auditTrace, { riskScore });
 
         auditTrace.log("approve_request_created", {
           intentId: intent.id,
@@ -237,9 +260,6 @@ export function createTxRoutes(services: TxRouteServices) {
             policyVersion: decision.policyVersion,
           });
         }
-
-        // Record rate limit tick (non-denied)
-        auditTrace.recordRateLimitTick(intent.wallet.address);
 
         const baseResponse = {
           intentId: intent.id,
@@ -282,11 +302,15 @@ export function createTxRoutes(services: TxRouteServices) {
           });
         }
 
+        if (!approvalResult.token) {
+          return reply.code(500).send({ error: "internal_error", message: "Approval token not issued" });
+        }
+
         return reply.code(200).send({
           ...baseResponse,
           approvalRequired: true,
           approved: true,
-          approvalTokenId: approvalResult.token!.id,
+          approvalTokenId: approvalResult.token.id,
         });
       },
     });
@@ -313,14 +337,9 @@ export function createTxRoutes(services: TxRouteServices) {
         const { intent, approvalTokenId } = request.body;
 
         // Build the transaction
-        const plan = buildFromIntent(intent);
+        const plan = await buildFromIntent(intent, builderDeps);
 
-        // Policy check (with rate limit count)
-        const recentTxCount = auditTrace.countRecentTxByWallet(
-          intent.wallet.address,
-          3_600_000,
-        );
-        const decision = evaluate(intent, policyConfig, { recentTxCount });
+        const decision = evaluatePolicy(intent, policyConfig, auditTrace);
 
         if (decision.decision === "deny") {
           return reply.code(403).send({
@@ -328,9 +347,6 @@ export function createTxRoutes(services: TxRouteServices) {
             reasons: decision.reasons,
           });
         }
-
-        // Record rate limit tick (non-denied)
-        auditTrace.recordRateLimitTick(intent.wallet.address);
 
         // Resolve approval token if needed
         let approvalToken;
@@ -342,35 +358,42 @@ export function createTxRoutes(services: TxRouteServices) {
               txRequestHash: plan.txRequestHash,
             });
           }
-          approvalToken = approvalTokenManager.get(approvalTokenId);
-          if (!approvalToken) {
+          const tokenCheck = approvalTokenManager.validate(approvalTokenId, intent.id, plan.txRequestHash);
+          if (!tokenCheck.valid) {
             return reply.code(403).send({
               error: "invalid_approval_token",
-              message: "Approval token not found or expired.",
+              reason: tokenCheck.reason,
+              message: `Approval token rejected: ${tokenCheck.reason ?? "unknown"}`,
             });
           }
+          // Don't consume here — WalletService.sign() validates+consumes as defense-in-depth
+          approvalToken = approvalTokenManager.get(approvalTokenId);
         }
+
+        // Resolve chain-scoped RPC for nonce, gas, fees, and broadcast
+        const chainRpc = resolveRpc(rpcClient, intent.chain.chainId);
 
         // Populate nonce and gas from RPC if available (required for broadcast)
         const txRequest = { ...plan.txRequest };
-        if (rpcClient) {
+        if (chainRpc) {
           try {
             const [nonce, gasEstimate, fees] = await Promise.all([
-              rpcClient.getTransactionCount(intent.wallet.address as `0x${string}`),
-              rpcClient.estimateGas({
+              chainRpc.getTransactionCount(intent.wallet.address as `0x${string}`),
+              chainRpc.estimateGas({
                 to: plan.txRequest.to!,
                 data: plan.txRequest.data!,
                 from: intent.wallet.address as `0x${string}`,
                 value: plan.txRequest.value ?? 0n,
               }),
-              rpcClient.estimateFeesPerGas(),
+              chainRpc.estimateFeesPerGas(),
             ]);
             txRequest.nonce = nonce;
             txRequest.gas = gasEstimate;
             txRequest.maxFeePerGas = fees.maxFeePerGas;
             txRequest.maxPriorityFeePerGas = fees.maxPriorityFeePerGas;
-          } catch {
-            // Non-fatal: proceed with builder defaults (broadcast may fail)
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            request.log.warn({ err: msg }, "RPC gas/nonce estimation failed, using builder defaults");
           }
         }
 
@@ -385,13 +408,13 @@ export function createTxRoutes(services: TxRouteServices) {
             approvalToken,
           });
 
-          // Attempt broadcast if RPC client is available
+          // Attempt broadcast if RPC client is available for this chain
           let broadcast = false;
           let broadcastError: string | undefined;
 
-          if (rpcClient) {
+          if (chainRpc) {
             try {
-              await rpcClient.sendRawTransaction(signed.signedTx as `0x${string}`);
+              await chainRpc.sendRawTransaction(signed.signedTx as `0x${string}`);
               broadcast = true;
               auditTrace.log("tx_broadcast", {
                 intentId: intent.id,

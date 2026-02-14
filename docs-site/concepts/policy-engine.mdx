@@ -1,0 +1,142 @@
+---
+title: Policy Engine
+description: How configurable policy rules control which transactions are allowed, denied, or require human approval.
+---
+
+## What you will learn
+
+- How the PolicyEngine evaluates TxIntents against configurable rules
+- Available policy fields and their effects
+- How to configure policies for different risk profiles
+- How risk scoring interacts with policy decisions
+
+## Overview
+
+The PolicyEngine is the gatekeeper of Domain B. Every TxIntent must pass policy evaluation before it can be built, simulated, or signed. The engine evaluates a fixed set of rules in order and produces one of three decisions:
+
+| Decision | Meaning |
+|----------|---------|
+| `allow` | Transaction proceeds without human confirmation |
+| `require_approval` | Transaction is paused for human confirmation |
+| `deny` | Transaction is rejected. No signing occurs. |
+
+## Evaluation order
+
+Rules are evaluated in this order. The first `deny` stops evaluation:
+
+| # | Rule | Checks | Decision on Failure |
+|---|------|--------|---------------------|
+| 1 | Chain restriction | `chainId` in `allowedChains` | **deny** |
+| 2 | Token allowlist | Token address in `tokenAllowlist` | **deny** |
+| 3 | Contract allowlist | Router/spender in `contractAllowlist` | **deny** |
+| 4 | Value limit | Value &lt;= `maxValueWei` | **deny** |
+| 5 | Approval amount | Amount &lt;= `maxApprovalAmount` | **deny** |
+| 6 | Recipient allowlist | Recipient in `recipientAllowlist` | **deny** |
+| 7 | Risk score | Score &lt;= `maxRiskScore` | **require_approval** |
+| 8 | Rate limit | Count &lt; `maxTxPerHour` | **deny** |
+
+## PolicyConfig Fields
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `version` | `"1"` | `"1"` | Schema version |
+| `maxValueWei` | string | `"0"` | Maximum transaction value in wei. `"0"` = deny all |
+| `maxApprovalAmount` | string | `"0"` | Maximum ERC-20 approval amount. `"0"` = deny all |
+| `contractAllowlist` | string[] | `[]` | Allowed contracts for swaps/approvals. Empty = allow all |
+| `tokenAllowlist` | string[] | `[]` | Allowed tokens for transfers/swaps. Empty = allow all |
+| `allowedChains` | number[] | `[1, 10, 42161, 8453]` | Allowed chain IDs |
+| `recipientAllowlist` | string[] | `[]` | Allowed transfer recipients. Empty = allow all |
+| `maxRiskScore` | integer | `50` | Risk score ceiling (0-100) |
+| `requireApprovalAbove` | object | `{"valueWei":"0"}` | Value threshold for mandatory approval |
+| `maxTxPerHour` | integer | `10` | Per-wallet rate limit (rolling hour) |
+
+<Warning>
+The default policy has `maxValueWei: "0"`, which denies ALL value-bearing transactions. This is fail-closed by design -- you must explicitly configure limits.
+</Warning>
+
+## Allowlist behavior
+
+Empty allowlists (`[]`) are **permissive** -- they allow all values:
+
+```json
+"tokenAllowlist": []        // All tokens allowed
+"tokenAllowlist": ["0x..."] // Only this specific token allowed
+```
+
+This applies to `contractAllowlist`, `tokenAllowlist`, and `recipientAllowlist`.
+
+## Value extraction per action type
+
+The policy engine extracts different fields depending on the action type:
+
+| Action | Value Field | Contract Field | Token Fields |
+|--------|------------|----------------|--------------|
+| `transfer` | `amount` | -- | `asset.address` |
+| `transfer_native` | `amount` | -- | -- |
+| `approve` | `amount` | `spender` | `asset.address` |
+| `swap_exact_in` | `amountIn` | `router` | `assetIn`, `assetOut` |
+| `swap_exact_out` | `maxAmountIn` | `router` | `assetIn`, `assetOut` |
+
+## Example policies
+
+<Tabs>
+  <Tab title="Restrictive">
+    Small value limit, specific tokens only, Base chain only, low rate limit:
+    ```json
+    {
+      "version": "1",
+      "maxValueWei": "1000000000000000000",
+      "maxApprovalAmount": "1000000000000000000",
+      "contractAllowlist": ["0x2626664c2603336E57B271c5C0b26F421741e481"],
+      "tokenAllowlist": [
+        "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "0x4200000000000000000000000000000000000006"
+      ],
+      "allowedChains": [8453],
+      "recipientAllowlist": ["0xTrustedRecipient"],
+      "maxRiskScore": 30,
+      "requireApprovalAbove": { "valueWei": "500000000000000000" },
+      "maxTxPerHour": 5
+    }
+    ```
+  </Tab>
+  <Tab title="Permissive (Development)">
+    High limits, all tokens/chains allowed, high rate limit:
+    ```json
+    {
+      "version": "1",
+      "maxValueWei": "100000000000000000000",
+      "maxApprovalAmount": "100000000000000000000",
+      "contractAllowlist": [],
+      "tokenAllowlist": [],
+      "allowedChains": [1, 10, 42161, 8453],
+      "recipientAllowlist": [],
+      "maxRiskScore": 80,
+      "requireApprovalAbove": { "valueWei": "10000000000000000000" },
+      "maxTxPerHour": 100
+    }
+    ```
+  </Tab>
+</Tabs>
+
+## Risk scoring
+
+The PreflightService computes a 7-factor risk score (0-100):
+
+| Factor | Weight | Description |
+|--------|--------|-------------|
+| Value magnitude | High | Larger values score higher |
+| Recipient history | Medium | Unknown recipients score higher |
+| Contract risk | Medium | Interactions with unverified contracts |
+| Gas anomaly | Low | Unusual gas estimates |
+| Approval risk | High | Unlimited approvals score very high |
+| Chain risk | Low | Less-established chains score higher |
+| Source trust | Low | Known adapter sources score lower |
+
+When the computed risk score exceeds `maxRiskScore`, the policy decision escalates to `require_approval`.
+
+## Next steps
+
+- [Approval Model](/concepts/approval-model) -- How approval works after policy evaluation
+- [Configuration Reference](/reference/config-reference) -- All PolicyConfig fields with examples
+- [Error Codes](/reference/error-codes) -- Policy denial error shapes

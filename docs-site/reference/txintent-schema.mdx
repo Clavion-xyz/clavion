@@ -1,0 +1,207 @@
+---
+title: TxIntent Schema
+description: The declarative transaction intent format used by all Clavion adapters.
+---
+
+## What you will learn
+
+- The structure of a TxIntent v1 document
+- All five action types and their fields
+- Constraint and metadata fields
+- How canonical hashing works for integrity binding
+
+## Overview
+
+A TxIntent is a JSON document that describes a desired crypto operation. Agents construct TxIntents; ISCL Core interprets and executes them. The schema uses `additionalProperties: false` at every level -- no undocumented fields are accepted.
+
+## Top-level structure
+
+```json
+{
+  "version": "1",
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "timestamp": 1700000000000,
+  "chain": {
+    "type": "evm",
+    "chainId": 8453,
+    "rpcHint": "https://mainnet.base.org"
+  },
+  "wallet": {
+    "address": "0x1234567890abcdef1234567890abcdef12345678",
+    "profile": "default"
+  },
+  "action": { ... },
+  "constraints": {
+    "maxGasWei": "1000000000000000",
+    "deadline": 1700003600,
+    "maxSlippageBps": 100
+  },
+  "preferences": {
+    "gasSpeed": "normal",
+    "privateRelay": false
+  },
+  "metadata": {
+    "source": "openclaw-adapter",
+    "note": "Weekly rebalance"
+  }
+}
+```
+
+## Required fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `version` | `"1"` | Schema version (literal string `"1"`) |
+| `id` | string | UUID for idempotency and audit correlation |
+| `timestamp` | number | Unix milliseconds, creation time |
+| `chain.type` | `"evm"` | Chain family (only EVM in v1) |
+| `chain.chainId` | number | Target chain: 1, 10, 42161, or 8453 |
+| `wallet.address` | string | Signing wallet (0x + 40 hex) |
+| `action` | object | One of the five action types (see below) |
+| `constraints.maxGasWei` | string | Hard cap on gas cost (numeric string) |
+| `constraints.deadline` | number | Unix timestamp expiry (seconds) |
+| `constraints.maxSlippageBps` | number | Slippage tolerance in basis points |
+
+## Optional fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `chain.rpcHint` | string | Informational RPC URL hint (not used for execution) |
+| `wallet.profile` | string | Wallet profile name |
+| `preferences.gasSpeed` | string | `slow`, `normal`, or `fast` |
+| `preferences.privateRelay` | boolean | Use private mempool |
+| `metadata.source` | string | Adapter name for audit |
+| `metadata.note` | string | Human-readable context |
+
+## Action types
+
+### transfer
+
+Transfer ERC-20 tokens to a recipient.
+
+```json
+{
+  "type": "transfer",
+  "asset": {
+    "kind": "erc20",
+    "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    "symbol": "USDC",
+    "decimals": 6
+  },
+  "to": "0xRecipientAddress",
+  "amount": "100000000"
+}
+```
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `asset.kind` | Yes | Always `"erc20"` |
+| `asset.address` | Yes | Token contract address |
+| `asset.symbol` | No | Token symbol |
+| `asset.decimals` | No | Token decimals |
+| `to` | Yes | Recipient address |
+| `amount` | Yes | Amount in base units (string) |
+
+### transfer_native
+
+Transfer native ETH (no calldata).
+
+```json
+{
+  "type": "transfer_native",
+  "to": "0xRecipientAddress",
+  "amount": "10000000000000000"
+}
+```
+
+### approve
+
+Set ERC-20 spending allowance for a contract.
+
+```json
+{
+  "type": "approve",
+  "asset": {
+    "kind": "erc20",
+    "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+  },
+  "spender": "0xRouterAddress",
+  "amount": "1000000000"
+}
+```
+
+### swap_exact_in
+
+Swap an exact input amount for a minimum output amount.
+
+```json
+{
+  "type": "swap_exact_in",
+  "router": "0x2626664c2603336E57B271c5C0b26F421741e481",
+  "provider": "uniswap_v3",
+  "assetIn": {
+    "kind": "erc20",
+    "address": "0x4200000000000000000000000000000000000006",
+    "symbol": "WETH"
+  },
+  "assetOut": {
+    "kind": "erc20",
+    "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    "symbol": "USDC"
+  },
+  "amountIn": "100000000000000000",
+  "minAmountOut": "250000000"
+}
+```
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `router` | Yes | DEX router address (validated against known routers) |
+| `provider` | No | `"uniswap_v3"` (default) or `"1inch"` |
+| `assetIn` | Yes | Token being sold |
+| `assetOut` | Yes | Token being bought |
+| `amountIn` | Yes | Exact input amount |
+| `minAmountOut` | Yes | Minimum output (slippage floor) |
+
+### swap_exact_out
+
+Swap a maximum input amount for an exact output amount.
+
+```json
+{
+  "type": "swap_exact_out",
+  "router": "0x2626664c2603336E57B271c5C0b26F421741e481",
+  "assetIn": { "kind": "erc20", "address": "0x..." },
+  "assetOut": { "kind": "erc20", "address": "0x..." },
+  "amountOut": "1000000",
+  "maxAmountIn": "500000000000000000"
+}
+```
+
+<Note>
+`swap_exact_out` does not support the `"1inch"` provider. The 1inch API v6 does not offer exact-output swaps. These always use Uniswap V3.
+</Note>
+
+## Known router addresses
+
+Swap `router` fields are validated against known addresses per chain:
+
+| Chain | Uniswap V3 Router | 1inch Router |
+|-------|-------------------|--------------|
+| Ethereum (1) | `0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45` | `0x111111125421cA6dc452d289314280a0f8842A65` |
+| Optimism (10) | `0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45` | `0x111111125421cA6dc452d289314280a0f8842A65` |
+| Arbitrum (42161) | `0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45` | `0x111111125421cA6dc452d289314280a0f8842A65` |
+| Base (8453) | `0x2626664c2603336E57B271c5C0b26F421741e481` | `0x111111125421cA6dc452d289314280a0f8842A65` |
+
+## Canonical hashing
+
+TxIntents are canonicalized using JCS (JSON Canonicalization Scheme) and hashed with keccak256. The resulting hash is used for:
+
+- **Approval token binding** -- the token is tied to a specific intent hash
+- **Integrity verification** -- modifying any field after approval invalidates the token
+
+## Next steps
+
+- [REST API](/reference/rest-api) -- Endpoints that accept TxIntents
+- [SkillManifest Schema](/reference/skillmanifest-schema) -- Skill packaging format
+- [Error Codes](/reference/error-codes) -- Validation error shapes

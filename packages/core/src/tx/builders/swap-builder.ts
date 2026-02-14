@@ -7,8 +7,16 @@ import type {
 } from "@clavion/types";
 import { computeTxRequestHash } from "./build-utils.js";
 
-export const UNISWAP_V3_SWAP_ROUTER_BASE =
-  "0x2626664c2603336E57B271c5C0b26F421741e481";
+/** Per-chain Uniswap V3 SwapRouter02 addresses. */
+export const UNISWAP_V3_ROUTERS: Record<number, string> = {
+  1: "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45", // Ethereum
+  10: "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45", // Optimism
+  42161: "0x68b3465833fb72A70ecDF485E0e4C7bD8665Fc45", // Arbitrum
+  8453: "0x2626664c2603336E57B271c5C0b26F421741e481", // Base
+};
+
+/** @deprecated Use UNISWAP_V3_ROUTERS[8453] instead. */
+export const UNISWAP_V3_SWAP_ROUTER_BASE = UNISWAP_V3_ROUTERS[8453]!;
 export const DEFAULT_FEE_TIER = 3000;
 
 // SwapRouter02 ABI fragments (no deadline in struct)
@@ -63,12 +71,13 @@ export function buildSwap(intent: TxIntent): BuildPlan {
     throw new Error(`Expected swap action, got ${action.type}`);
   }
 
-  if (
-    action.router.toLowerCase() !==
-    UNISWAP_V3_SWAP_ROUTER_BASE.toLowerCase()
-  ) {
+  const expectedRouter = UNISWAP_V3_ROUTERS[intent.chain.chainId];
+  if (!expectedRouter) {
+    throw new Error(`Swaps not supported on chain ${intent.chain.chainId}`);
+  }
+  if (action.router.toLowerCase() !== expectedRouter.toLowerCase()) {
     throw new Error(
-      `Unknown router: ${action.router}. Only Uniswap V3 SwapRouter02 on Base is supported.`,
+      `Unknown router ${action.router} for chain ${intent.chain.chainId}. Expected: ${expectedRouter}`,
     );
   }
 

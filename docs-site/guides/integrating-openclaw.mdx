@@ -1,0 +1,145 @@
+---
+title: Integrating OpenClaw
+description: Connect Clavion to OpenClaw as a secure execution backend for crypto skills.
+---
+
+## What you will learn
+
+- How the OpenClaw adapter connects to ISCL Core
+- How to configure OpenClaw skills to use Clavion for signing
+- How to run the full demo stack with Docker Compose
+- How to write a custom OpenClaw skill that uses Clavion
+
+## Overview
+
+The `@clavion/adapter-openclaw` package provides thin skill wrappers that translate OpenClaw's skill interface into ISCL TxIntents. When an OpenClaw agent invokes a crypto skill, the adapter constructs a TxIntent and sends it to ISCL Core via the `ISCLClient`.
+
+```text
+OpenClaw Agent
+    ↓ skill invocation
+@clavion/adapter-openclaw (Domain A)
+    ↓ HTTP (ISCLClient)
+@clavion/core (Domain B)
+    ↓ policy → approval → signing → broadcast
+Blockchain
+```
+
+## Step 1: Start the Docker Compose stack
+
+The easiest way to run OpenClaw + Clavion together is the Docker Compose demo stack:
+
+```bash
+docker compose -f docker/compose.yaml --profile demo up -d
+```
+
+This starts three services:
+
+| Service | Port | Role |
+|---------|------|------|
+| `anvil` | 8545 | Local Base fork (Anvil) |
+| `iscl-core` | 3100 | ISCL Core API |
+| `openclaw` | -- | OpenClaw agent with Clavion skills |
+
+Verify all services are running:
+
+```bash
+docker compose -f docker/compose.yaml ps
+```
+
+## Step 2: Verify connectivity
+
+Check that ISCL Core is healthy:
+
+```bash
+curl http://localhost:3100/v1/health
+```
+
+Check that the OpenClaw agent can reach ISCL Core:
+
+```bash
+docker compose -f docker/compose.yaml logs openclaw | head -20
+```
+
+You should see the ISCLClient health check succeeding on startup.
+
+## Step 3: Run a demo transfer
+
+The demo stack includes a pre-configured transfer script:
+
+```bash
+npx tsx scripts/demo-transfer.ts
+```
+
+This script:
+1. Constructs a TxIntent for a USDC transfer on the Anvil fork
+2. Sends it through the OpenClaw skill wrapper
+3. Passes through ISCL's pipeline (policy, simulation, approval, signing)
+4. Broadcasts to the Anvil fork
+5. Verifies the on-chain balance change
+
+## Step 4: Run a demo swap
+
+```bash
+npx tsx scripts/demo-swap.ts
+```
+
+This executes a WETH → USDC swap through Uniswap V3 on the Anvil fork.
+
+## Writing a custom OpenClaw skill
+
+An OpenClaw skill that uses Clavion follows this pattern:
+
+```javascript
+// SKILL.md defines the skill interface for OpenClaw
+// run.mjs implements the skill logic
+
+import { ISCLClient } from "@clavion/adapter-openclaw";
+
+const client = new ISCLClient({
+  baseUrl: process.env.ISCL_API_URL || "http://localhost:3100",
+});
+
+// Build a TxIntent
+const intent = {
+  version: "1",
+  id: crypto.randomUUID(),
+  timestamp: Date.now(),
+  chain: { type: "evm", chainId: 8453 },
+  wallet: { address: process.env.ISCL_WALLET_ADDRESS },
+  action: {
+    type: "transfer",
+    asset: { kind: "erc20", address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" },
+    to: recipientAddress,
+    amount: amountInWei,
+  },
+  constraints: {
+    maxGasWei: "1000000000000000",
+    deadline: Math.floor(Date.now() / 1000) + 3600,
+    maxSlippageBps: 0,
+  },
+  metadata: { source: "openclaw-adapter" },
+};
+
+// Execute the secure pipeline
+const approval = await client.txApproveRequest(intent);
+if (approval.approved) {
+  const result = await client.txSignAndSend({
+    intent,
+    approvalTokenId: approval.approvalTokenId,
+  });
+  console.log(`TX: ${result.txHash}`);
+}
+```
+
+## Verification
+
+<Check>Docker Compose stack starts with all three services healthy</Check>
+<Check>Demo transfer script completes and tokens move on Anvil</Check>
+<Check>Demo swap script completes with WETH → USDC exchange</Check>
+<Check>Audit trail shows all events correlated by intent ID</Check>
+
+## Next steps
+
+- [Building Agents](/guides/building-agents) -- Use MCP, Eliza, or Telegram instead
+- [Custom Adapter](/guides/custom-adapter) -- Build adapters for other frameworks
+- [Transaction Lifecycle](/concepts/transaction-lifecycle) -- Understand the full pipeline

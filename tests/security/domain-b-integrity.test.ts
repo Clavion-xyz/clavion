@@ -5,33 +5,21 @@ import { join } from "node:path";
 import { buildApp, buildFromIntent } from "@clavion/core";
 import { PreflightService } from "@clavion/preflight";
 import { EncryptedKeystore } from "@clavion/signer";
-import { validFixtures } from "../../tools/fixtures/index.js";
+import {
+  validFixtures,
+  TEST_PRIVATE_KEY,
+  TEST_PASSPHRASE,
+  noApprovalConfig,
+} from "../../tools/fixtures/index.js";
 import type { FastifyInstance } from "fastify";
 import type { PolicyConfig, TxIntent } from "@clavion/types";
 import type { RpcClient, CallResult } from "@clavion/types/rpc";
 
 function permissiveConfig(overrides?: Partial<PolicyConfig>): PolicyConfig {
-  return {
-    version: "1",
-    maxValueWei: "1000000000000000000000",
-    maxApprovalAmount: "1000000000000000000000",
-    contractAllowlist: ["0x2626664c2603336E57B271c5C0b26F421741e481"],
-    tokenAllowlist: [
-      "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-      "0x4200000000000000000000000000000000000006",
-    ],
-    allowedChains: [8453],
-    recipientAllowlist: [],
-    maxRiskScore: 70,
-    requireApprovalAbove: { valueWei: "10000000000000000000" },
-    maxTxPerHour: 100,
-    ...overrides,
-  };
+  return noApprovalConfig(overrides);
 }
 
-const TEST_KEY =
-  "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80" as const;
-const TEST_PASSPHRASE = "test-pass";
+const TEST_KEY = TEST_PRIVATE_KEY;
 
 // ─── B1: Simulation revert elevates risk score ──────────────────────────────
 
@@ -54,7 +42,7 @@ describe("SecurityTest_B1: RPC mismatch elevates risk score", () => {
     };
 
     const svc = new PreflightService(mockRpc, permissiveConfig());
-    const plan = buildFromIntent(validFixtures.transfer);
+    const plan = await buildFromIntent(validFixtures.transfer);
     const result = await svc.simulate(validFixtures.transfer, plan);
 
     expect(result.riskScore).toBeGreaterThanOrEqual(50);
@@ -80,7 +68,7 @@ describe("SecurityTest_B1: RPC mismatch elevates risk score", () => {
     };
 
     const svc = new PreflightService(mockRpc, permissiveConfig());
-    const plan = buildFromIntent(validFixtures.transfer);
+    const plan = await buildFromIntent(validFixtures.transfer);
     const result = await svc.simulate(validFixtures.transfer, plan);
 
     expect(result.riskScore).toBeLessThan(50);

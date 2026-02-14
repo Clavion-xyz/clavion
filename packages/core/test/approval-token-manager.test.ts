@@ -32,40 +32,40 @@ describe("ApprovalTokenManager", () => {
 
   test("validate() succeeds with matching parameters", () => {
     const token = manager.issue(intentId, txRequestHash);
-    expect(manager.validate(token.id, intentId, txRequestHash)).toBe(true);
+    expect(manager.validate(token.id, intentId, txRequestHash)).toEqual({ valid: true });
   });
 
   test("validate() fails for non-existent token", () => {
-    expect(manager.validate("non-existent-id", intentId, txRequestHash)).toBe(false);
+    expect(manager.validate("non-existent-id", intentId, txRequestHash)).toEqual({ valid: false, reason: "not_found" });
   });
 
   test("validate() fails with wrong intentId", () => {
     const token = manager.issue(intentId, txRequestHash);
-    expect(manager.validate(token.id, "wrong-intent-id", txRequestHash)).toBe(false);
+    expect(manager.validate(token.id, "wrong-intent-id", txRequestHash)).toEqual({ valid: false, reason: "intent_mismatch" });
   });
 
   test("validate() fails with wrong txRequestHash", () => {
     const token = manager.issue(intentId, txRequestHash);
-    expect(manager.validate(token.id, intentId, "0xwronghash")).toBe(false);
+    expect(manager.validate(token.id, intentId, "0xwronghash")).toEqual({ valid: false, reason: "hash_mismatch" });
   });
 
   test("validate() fails for consumed token", () => {
     const token = manager.issue(intentId, txRequestHash);
     manager.consume(token.id);
-    expect(manager.validate(token.id, intentId, txRequestHash)).toBe(false);
+    expect(manager.validate(token.id, intentId, txRequestHash)).toEqual({ valid: false, reason: "consumed" });
   });
 
   test("validate() fails for expired token", () => {
     // Issue with 0 TTL — already expired
     const token = manager.issue(intentId, txRequestHash, 0);
-    expect(manager.validate(token.id, intentId, txRequestHash)).toBe(false);
+    expect(manager.validate(token.id, intentId, txRequestHash)).toEqual({ valid: false, reason: "expired" });
   });
 
   test("consume() marks token as used", () => {
     const token = manager.issue(intentId, txRequestHash);
-    expect(manager.validate(token.id, intentId, txRequestHash)).toBe(true);
+    expect(manager.validate(token.id, intentId, txRequestHash)).toEqual({ valid: true });
     manager.consume(token.id);
-    expect(manager.validate(token.id, intentId, txRequestHash)).toBe(false);
+    expect(manager.validate(token.id, intentId, txRequestHash)).toEqual({ valid: false, reason: "consumed" });
   });
 
   test("cleanup() removes expired tokens", () => {
@@ -76,9 +76,9 @@ describe("ApprovalTokenManager", () => {
 
     manager.cleanup();
 
-    // Expired token should be gone (validate returns false even before cleanup, but cleanup deletes the row)
-    expect(manager.validate(expired.id, intentId, txRequestHash)).toBe(false);
+    // Expired token should be gone (cleanup deletes the row)
+    expect(manager.validate(expired.id, intentId, txRequestHash)).toEqual({ valid: false, reason: "not_found" });
     // Valid token should still exist
-    expect(manager.validate(valid.id, "other-intent", txRequestHash)).toBe(true);
+    expect(manager.validate(valid.id, "other-intent", txRequestHash)).toEqual({ valid: true });
   });
 });

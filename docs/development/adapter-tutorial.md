@@ -1,0 +1,767 @@
+# Adapter Development Tutorial
+
+## Overview
+
+An **adapter** is a Domain A component that bridges an AI agent framework to the ISCL secure signing layer. Adapters construct declarative `TxIntent` objects, call ISCL Core over HTTP, and present results back to the agent or user. They never touch private keys, never sign transactions, and never call the blockchain directly.
+
+Every adapter in the Clavion ecosystem follows the same contract:
+
+1. Accept user/agent input (natural language, command, tool call).
+2. Build a `TxIntent` describing the desired on-chain action.
+3. Send the intent through the ISCL Core API for policy checks, simulation, approval, signing, and broadcast.
+4. Return the result to the caller.
+
+This tutorial walks through building a new adapter from scratch using the patterns established by the four existing adapters.
+
+## Architecture Pattern
+
+```
++---------------------+       +------------------+       +-------------------+
+|   Agent Framework   |       |     Adapter      |       |    ISCL Core      |
+|  (MCP / Eliza /     | ----> |  (Domain A)      | ----> |   (Domain B)      |
+|   Telegram / etc.)  |       |                  |       |                   |
++---------------------+       +-------+----------+       +--------+----------+
+                                      |                           |
+                              ISCLClient (HTTP)           PolicyEngine
+                              buildIntent()               Preflight
+                              executeSecurePipeline()     WalletService
+                                                          AuditTrace
+                                                          RPC access
+```
+
+Data flow for a fund-affecting operation:
+
+```
+Agent Input
+  |
+  v
+Adapter: parse parameters
+  |
+  v
+Adapter: buildIntent({ walletAddress, action, chainId, constraints })
+  |
+  v
+ISCLClient: POST /v1/tx/approve-request   ──>  ISCL Core: policy + preflight + approval prompt
+  |                                                       |
+  v                                                       v
+ISCLClient receives { approved, approvalTokenId }   <──  User approves/denies
+  |
+  v (if approved)
+ISCLClient: POST /v1/tx/sign-and-send     ──>  ISCL Core: verify token, sign, broadcast
+  |                                                       |
+  v                                                       v
+Adapter: return { txHash, broadcast }      <──  Signed tx + receipt
+```
+
+The adapter never sees keys, never signs, and never contacts the blockchain. All chain access is mediated by ISCL Core.
+
+## Existing Adapters
+
+| Adapter | Framework | Package | Use Case | Key Files |
+|---------|-----------|---------|----------|-----------|
+| OpenClaw | OpenClaw runtime | `@clavion/adapter-openclaw` | AI agent skills | `src/skills/`, `src/shared/iscl-client.ts` |
+| MCP | Model Context Protocol | `@clavion/adapter-mcp` | Claude Desktop / Cursor / IDEs | `src/server.ts`, `src/tools/` |
+| Eliza | ElizaOS (ai16z) | `@clavion/plugin-eliza` | Autonomous agents | `src/index.ts`, `src/actions/` |
+| Telegram | grammY | `@clavion/adapter-telegram` | Chat-based approval | `src/bot.ts`, `src/commands/` |
+
+All four adapters share the same core pattern: `ISCLClient` + `buildIntent()` + `executeSecurePipeline()`. The only differences are how they receive input and present output.
+
+## Step 1: Package Setup
+
+Create the package directory under `packages/`:
+
+```
+packages/adapter-myframework/
+  src/
+    shared/
+      iscl-client.ts       # HTTP client (copy from existing adapter)
+      intent-builder.ts    # TxIntent construction helper
+      pipeline.ts          # 2-step approve-then-sign pipeline
+    index.ts               # Entry point, exports
+  test/
+    handler.test.ts
+  package.json
+  tsconfig.json
+```
+
+### package.json
+
+```json
+{
+  "name": "@clavion/adapter-myframework",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -b",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@clavion/types": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "vitest": "^2.0.0"
+  }
+}
+```
+
+Only `@clavion/types` is needed from the monorepo. This package provides the `TxIntent`, `ActionObject`, and other shared interfaces. Never add Domain B packages (`@clavion/signer`, `@clavion/policy`, `@clavion/audit`, etc.) as dependencies.
+
+### tsconfig.json
+
+```json
+{
+  "extends": "../../tsconfig.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "src"
+  },
+  "include": ["src"],
+  "references": [
+    { "path": "../types" }
+  ]
+}
+```
+
+## Step 2: ISCLClient
+
+Copy `src/shared/iscl-client.ts` from any existing adapter. The client is framework-agnostic and identical across all adapters. It wraps the ISCL Core REST API with typed methods.
+
+### Constructor
+
+```typescript
+import { ISCLClient } from "./shared/iscl-client.js";
+
+// Uses ISCL_API_URL env var, or defaults to http://127.0.0.1:3000
+const client = new ISCLClient();
+
+// Or provide explicit options
+const client = new ISCLClient({
+  baseUrl: "http://localhost:3000",
+  timeoutMs: 15_000,
+});
+```
+
+The constructor reads the base URL from three sources in priority order:
+1. `options.baseUrl` (explicit)
+2. `ISCL_API_URL` environment variable
+3. `http://127.0.0.1:3000` (default)
+
+### Key Methods
+
+| Method | HTTP Call | Purpose |
+|--------|----------|---------|
+| `health()` | `GET /v1/health` | Connectivity check, returns version + uptime |
+| `txBuild(intent)` | `POST /v1/tx/build` | Build transaction (policy check only, no signing) |
+| `txPreflight(intent)` | `POST /v1/tx/preflight` | Simulate + risk score |
+| `txApproveRequest(intent)` | `POST /v1/tx/approve-request` | Full pipeline: build + preflight + user prompt |
+| `txSignAndSend(payload)` | `POST /v1/tx/sign-and-send` | Sign + broadcast (requires approval token) |
+| `balance(token, account, chainId?)` | `GET /v1/balance/:token/:account` | Read ERC-20 or native balance |
+| `txReceipt(hash)` | `GET /v1/tx/:hash` | Look up transaction receipt |
+
+### Error Handling
+
+All methods throw `ISCLError` on non-2xx responses:
+
+```typescript
+import { ISCLError } from "./shared/iscl-client.js";
+
+try {
+  const result = await client.txApproveRequest(intent);
+} catch (err) {
+  if (err instanceof ISCLError) {
+    console.error(`ISCL API error ${err.status}:`, err.body);
+    // err.status — HTTP status code (400, 403, 422, 500, etc.)
+    // err.body   — parsed JSON response body with error details
+  }
+}
+```
+
+Common error codes:
+- **400** — Invalid TxIntent (schema validation failed)
+- **403** — Policy denied the transaction
+- **404** — Resource not found (e.g., unknown tx hash)
+- **422** — Preflight simulation reverted
+- **500** — Internal server error
+
+## Step 3: Intent Builder
+
+The intent builder converts framework-specific parameters into a `TxIntent` object. Every adapter has one, and they are nearly identical.
+
+```typescript
+import { randomUUID } from "node:crypto";
+import type { TxIntent, ActionObject } from "@clavion/types";
+
+export interface IntentBuilderOptions {
+  walletAddress: string;
+  action: ActionObject;
+  chainId?: number;       // Default: 8453 (Base)
+  maxGasWei?: string;     // Default: "1000000000000000" (0.001 ETH)
+  deadline?: number;      // Default: now + 600 (10 minutes)
+  slippageBps?: number;   // Default: 100 (1%)
+  source?: string;        // Adapter identifier for audit trail
+}
+
+export function buildIntent(options: IntentBuilderOptions): TxIntent {
+  const now = Math.floor(Date.now() / 1000);
+  return {
+    version: "1",
+    id: randomUUID(),
+    timestamp: now,
+    chain: {
+      type: "evm",
+      chainId: options.chainId ?? 8453,
+    },
+    wallet: { address: options.walletAddress },
+    action: options.action,
+    constraints: {
+      maxGasWei: options.maxGasWei ?? "1000000000000000",
+      deadline: options.deadline ?? now + 600,
+      maxSlippageBps: options.slippageBps ?? 100,
+    },
+    metadata: { source: options.source ?? "myframework-adapter" },
+  };
+}
+```
+
+### Building Actions for Each Type
+
+**ERC-20 Transfer:**
+```typescript
+import type { TransferAction } from "@clavion/types";
+
+const action: TransferAction = {
+  type: "transfer",
+  asset: { kind: "erc20", address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913" },
+  to: "0xRecipientAddress...",
+  amount: "1000000",  // In token base units (e.g., 1 USDC = 1000000)
+};
+```
+
+**Native ETH Transfer:**
+```typescript
+import type { TransferNativeAction } from "@clavion/types";
+
+const action: TransferNativeAction = {
+  type: "transfer_native",
+  to: "0xRecipientAddress...",
+  amount: "1000000000000000000",  // In wei (1 ETH)
+};
+```
+
+**ERC-20 Approval:**
+```typescript
+import type { ApproveAction } from "@clavion/types";
+
+const action: ApproveAction = {
+  type: "approve",
+  asset: { kind: "erc20", address: "0xTokenAddress..." },
+  spender: "0xSpenderContract...",
+  amount: "1000000000",
+};
+```
+
+**Swap (exact input):**
+```typescript
+import type { SwapExactInAction } from "@clavion/types";
+
+const action: SwapExactInAction = {
+  type: "swap_exact_in",
+  router: "0x2626664c2603336E57B271c5C0b26F421741e481",  // Uniswap V3 on Base
+  assetIn: { kind: "erc20", address: "0xTokenIn..." },
+  assetOut: { kind: "erc20", address: "0xTokenOut..." },
+  amountIn: "1000000",
+  minAmountOut: "990000",
+  provider: "uniswap_v3",  // Or "1inch" for 1inch aggregator routing
+};
+```
+
+## Step 4: Handler Functions (The 2-Step Pipeline)
+
+Every fund-affecting operation follows the same two-step pipeline:
+
+1. **`txApproveRequest(intent)`** — Sends the intent to ISCL Core, which runs policy checks, preflight simulation, and prompts the user for approval. This call blocks until the user approves or denies.
+2. **`txSignAndSend({ intent, approvalTokenId })`** — If approved, sends the intent with the single-use approval token. ISCL Core verifies the token, signs the transaction, and broadcasts it.
+
+### Shared Pipeline Function
+
+Extract this into `src/shared/pipeline.ts` so all handlers share the same logic:
+
+```typescript
+import type { ISCLClient } from "./iscl-client.js";
+import type { TxIntent } from "@clavion/types";
+
+export interface PipelineResult {
+  success: boolean;
+  intentId: string;
+  approved: boolean;
+  txHash?: string;
+  broadcast?: boolean;
+  broadcastError?: string;
+  description?: string;
+  riskScore?: number;
+  riskReasons?: string[];
+  declineReason?: string;
+}
+
+export async function executeSecurePipeline(
+  intent: TxIntent,
+  client: ISCLClient,
+): Promise<PipelineResult> {
+  // Step 1: approve-request (policy + preflight + user prompt)
+  const approval = await client.txApproveRequest(intent);
+
+  if (!approval.approved) {
+    return {
+      success: false,
+      intentId: approval.intentId,
+      approved: false,
+      description: approval.description,
+      riskScore: approval.riskScore,
+      riskReasons: approval.riskReasons,
+      declineReason: approval.reason ?? "user_declined",
+    };
+  }
+
+  // Step 2: sign-and-send (with single-use approval token)
+  const signed = await client.txSignAndSend({
+    intent,
+    approvalTokenId: approval.approvalTokenId,
+  });
+
+  return {
+    success: true,
+    intentId: signed.intentId,
+    approved: true,
+    txHash: signed.txHash,
+    broadcast: signed.broadcast,
+    broadcastError: signed.broadcastError,
+    description: approval.description,
+    riskScore: approval.riskScore,
+    riskReasons: approval.riskReasons,
+  };
+}
+```
+
+### Complete Handler Example
+
+```typescript
+import type { ISCLClient } from "./shared/iscl-client.js";
+import type { TransferAction } from "@clavion/types";
+import { ISCLError } from "./shared/iscl-client.js";
+import { buildIntent } from "./shared/intent-builder.js";
+import { executeSecurePipeline } from "./shared/pipeline.js";
+
+interface TransferParams {
+  wallet: string;
+  tokenAddress: string;
+  recipient: string;
+  amount: string;
+  chainId?: number;
+}
+
+async function handleTransfer(params: TransferParams, client: ISCLClient) {
+  try {
+    const action: TransferAction = {
+      type: "transfer",
+      asset: { kind: "erc20", address: params.tokenAddress },
+      to: params.recipient,
+      amount: params.amount,
+    };
+
+    const intent = buildIntent({
+      walletAddress: params.wallet,
+      action,
+      chainId: params.chainId,
+      source: "myframework-adapter",
+    });
+
+    const result = await executeSecurePipeline(intent, client);
+
+    if (!result.success) {
+      return {
+        error: `Denied: ${result.declineReason}`,
+        riskScore: result.riskScore,
+      };
+    }
+
+    return {
+      txHash: result.txHash,
+      broadcast: result.broadcast,
+      intentId: result.intentId,
+    };
+  } catch (err) {
+    if (err instanceof ISCLError) {
+      return { error: `ISCL error ${err.status}: ${JSON.stringify(err.body)}` };
+    }
+    throw err;
+  }
+}
+```
+
+### Read-Only Operations
+
+Balance checks and transaction lookups do not require the approval pipeline:
+
+```typescript
+async function handleBalance(
+  tokenAddress: string,
+  walletAddress: string,
+  client: ISCLClient,
+  chainId?: number,
+) {
+  const result = await client.balance(tokenAddress, walletAddress, chainId);
+  return { token: result.token, balance: result.balance };
+}
+```
+
+## Step 5: Framework Integration
+
+Each framework has its own way of registering tools, commands, or actions. Below are the patterns used by the four existing adapters.
+
+### MCP (Model Context Protocol)
+
+Register tools on an `McpServer` instance. Each tool has a name, description, Zod schema, and async handler:
+
+```typescript
+import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+
+const server = new McpServer({ name: "clavion-iscl", version: "0.1.0" });
+const client = new ISCLClient();
+
+server.tool(
+  "clavion_transfer",
+  "Transfer ERC-20 tokens securely through Clavion.",
+  {
+    wallet: { type: "string", description: "Sender wallet address" },
+    to: { type: "string", description: "Recipient address" },
+    asset: { type: "object", properties: { kind: {}, address: {}, symbol: {} } },
+    amount: { type: "string", description: "Amount in base units" },
+    chainId: { type: "number", description: "Chain ID (default 8453)" },
+  },
+  async (args) => handleTransfer(args, client),
+);
+```
+
+**Key file:** `packages/adapter-mcp/src/server.ts`
+
+### ElizaOS (ai16z)
+
+Export a `Plugin` object with services, providers, and actions. Each action has a name, similes (aliases), validate function, handler, and examples:
+
+```typescript
+import type { Action, Plugin } from "@elizaos/core";
+
+const transferAction: Action = {
+  name: "CLAVION_TRANSFER",
+  similes: ["SEND_TOKENS", "TRANSFER_ERC20"],
+  description: "Transfer ERC-20 tokens via Clavion ISCL.",
+  examples: [/* ... */],
+
+  validate: async (runtime) => {
+    const apiUrl = runtime.getSetting("ISCL_API_URL");
+    const wallet = runtime.getSetting("ISCL_WALLET_ADDRESS");
+    return typeof apiUrl === "string" && typeof wallet === "string";
+  },
+
+  handler: async (runtime, message, _state, _options, callback) => {
+    const wallet = runtime.getSetting("ISCL_WALLET_ADDRESS") as string;
+    const service = runtime.getService("clavion");
+    // ... extract params, build intent, execute pipeline ...
+    if (callback) await callback({ text: `Transfer successful! Tx: ${result.txHash}` });
+    return { success: true, data: { txHash: result.txHash } };
+  },
+};
+
+export const myPlugin: Plugin = {
+  name: "@clavion/plugin-eliza",
+  description: "Secure crypto operations via Clavion ISCL.",
+  services: [ClavionService],
+  actions: [transferAction],
+};
+```
+
+**Key file:** `packages/plugin-eliza/src/index.ts`
+
+### Telegram (grammY)
+
+Register bot commands. For fund-affecting operations, use an approval flow with inline keyboards:
+
+```typescript
+import { Bot } from "grammy";
+
+const bot = new Bot(config.botToken);
+const client = new ISCLClient();
+
+bot.command("transfer", async (ctx) => {
+  // Parse command: /transfer 1000000 0xToken to 0xRecipient
+  const params = parseTransferCommand(ctx.message?.text ?? "");
+  if (!params) {
+    await ctx.reply("Usage: /transfer <amount> <token> to <recipient>");
+    return;
+  }
+
+  const intent = buildIntent({
+    walletAddress: config.walletAddress,
+    action: { type: "transfer", asset: { kind: "erc20", address: params.token }, to: params.to, amount: params.amount },
+    chainId: config.chainId,
+  });
+
+  // Initiate approval flow (sends inline keyboard, waits for callback)
+  await initiateApprovalFlow(ctx, intent, client, config, activeTransactions);
+});
+
+// Handle approve/deny button presses
+bot.on("callback_query:data", async (ctx) => {
+  // Parse "approve:<requestId>" or "deny:<requestId>"
+  // Submit decision to ISCL Core, then sign-and-send if approved
+});
+```
+
+**Key file:** `packages/adapter-telegram/src/bot.ts`
+
+### OpenClaw
+
+Export an async `run` function that accepts skill parameters and returns a `SkillResult`:
+
+```typescript
+import type { SkillResult } from "../types.js";
+
+export async function handleTransfer(
+  params: TransferParams,
+  client: ISCLClient,
+): Promise<SkillResult> {
+  try {
+    const intent = buildIntent({ walletAddress: params.walletAddress, action, chainId: params.chainId });
+    const result = await client.txBuild(intent);
+    return { success: true, intentId: result.intentId, description: result.description };
+  } catch (err) {
+    if (err instanceof ISCLError) {
+      return { success: false, error: err.message };
+    }
+    throw err;
+  }
+}
+```
+
+**Key file:** `packages/adapter-openclaw/src/skills/clavion-swap/index.ts`
+
+## Step 6: Testing
+
+### Unit Tests: Mock the ISCLClient
+
+Test intent construction and handler logic without a running ISCL server:
+
+```typescript
+import { describe, it, expect, vi } from "vitest";
+import { buildIntent } from "../src/shared/intent-builder.js";
+import type { ISCLClient } from "../src/shared/iscl-client.js";
+
+describe("buildIntent", () => {
+  it("creates a valid TxIntent with defaults", () => {
+    const intent = buildIntent({
+      walletAddress: "0xAlice",
+      action: {
+        type: "transfer",
+        asset: { kind: "erc20", address: "0xUSDC" },
+        to: "0xBob",
+        amount: "1000000",
+      },
+    });
+
+    expect(intent.version).toBe("1");
+    expect(intent.chain.chainId).toBe(8453);
+    expect(intent.action.type).toBe("transfer");
+    expect(intent.constraints.maxSlippageBps).toBe(100);
+    expect(intent.metadata?.source).toBe("myframework-adapter");
+  });
+});
+
+describe("handleTransfer", () => {
+  it("returns txHash on approval", async () => {
+    const mockClient = {
+      txApproveRequest: vi.fn().mockResolvedValue({
+        intentId: "intent-1",
+        approved: true,
+        approvalTokenId: "token-1",
+        description: "Transfer 1 USDC",
+        riskScore: 15,
+        riskReasons: [],
+        warnings: [],
+        gasEstimate: "21000",
+        policyDecision: { decision: "allow", reasons: [], policyVersion: "1" },
+      }),
+      txSignAndSend: vi.fn().mockResolvedValue({
+        intentId: "intent-1",
+        txHash: "0xabc...",
+        signedTx: "0x...",
+        broadcast: true,
+      }),
+    } as unknown as ISCLClient;
+
+    const result = await handleTransfer(
+      { wallet: "0xAlice", tokenAddress: "0xUSDC", recipient: "0xBob", amount: "1000000" },
+      mockClient,
+    );
+
+    expect(result.txHash).toBe("0xabc...");
+    expect(mockClient.txApproveRequest).toHaveBeenCalledOnce();
+    expect(mockClient.txSignAndSend).toHaveBeenCalledWith(
+      expect.objectContaining({ approvalTokenId: "token-1" }),
+    );
+  });
+
+  it("returns error when user denies", async () => {
+    const mockClient = {
+      txApproveRequest: vi.fn().mockResolvedValue({
+        intentId: "intent-2",
+        approved: false,
+        reason: "user_declined",
+        riskScore: 45,
+        riskReasons: ["high_value"],
+      }),
+    } as unknown as ISCLClient;
+
+    const result = await handleTransfer(
+      { wallet: "0xAlice", tokenAddress: "0xUSDC", recipient: "0xBob", amount: "999999999" },
+      mockClient,
+    );
+
+    expect(result.error).toContain("Denied");
+    expect(mockClient.txApproveRequest).toHaveBeenCalledOnce();
+  });
+});
+```
+
+### Integration Tests: Real ISCL Server
+
+For integration tests, spin up an ephemeral `buildApp()` server and test the full round-trip:
+
+```typescript
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { buildApp } from "@clavion/core";
+import { ISCLClient } from "../src/shared/iscl-client.js";
+
+describe("adapter integration", () => {
+  let app: Awaited<ReturnType<typeof buildApp>>;
+  let client: ISCLClient;
+
+  beforeAll(async () => {
+    app = await buildApp({
+      rpc: mockRpcClient,
+      promptFn: async () => true,  // Auto-approve for tests
+    });
+    await app.listen({ port: 0 });
+    const port = (app.server.address() as { port: number }).port;
+    client = new ISCLClient({ baseUrl: `http://127.0.0.1:${port}` });
+  });
+
+  afterAll(async () => {
+    await app.close();
+  });
+
+  it("completes a transfer through the full pipeline", async () => {
+    const intent = buildIntent({
+      walletAddress: "0xTestWallet",
+      action: { type: "transfer_native", to: "0xRecipient", amount: "1000" },
+    });
+
+    const result = await executeSecurePipeline(intent, client);
+    expect(result.success).toBe(true);
+    expect(result.txHash).toBeDefined();
+  });
+});
+```
+
+## Security Checklist for Domain A Compliance
+
+Every adapter must satisfy these five invariants. Violations break the trust model and will be caught by the `domain-b-integrity.test.ts` security test suite.
+
+| # | Rule | What to Check |
+|---|------|---------------|
+| 1 | **Never import Domain B packages** | No imports from `@clavion/signer`, `@clavion/policy`, `@clavion/audit`, `@clavion/preflight`, `@clavion/registry`, or `@clavion/sandbox`. The only allowed monorepo dependency is `@clavion/types`. |
+| 2 | **Never access private keys** | No reading key files, no `process.env.PRIVATE_KEY`, no key material in memory. The adapter has no concept of a private key. |
+| 3 | **Never make direct RPC/blockchain calls** | No `viem` client creation, no `ethers.JsonRpcProvider`, no `fetch("https://rpc.example.com")`. All chain access goes through the ISCL Core API (`/v1/balance/`, `/v1/tx/`, etc.). |
+| 4 | **Never construct raw calldata** | No `encodeFunctionData`, no ABI encoding, no raw `data` fields. Use the declarative `TxIntent` format and let ISCL Core build the transaction. |
+| 5 | **Always handle ISCLError responses** | Check for `ISCLError`, display policy deny reasons to the user, and never silently swallow errors. A policy denial is not a bug -- it is the system working correctly. |
+
+## Complete Minimal Example
+
+A self-contained adapter that works with any framework. This example implements a transfer handler in approximately 50 lines:
+
+```typescript
+// src/index.ts — Complete minimal adapter
+import { randomUUID } from "node:crypto";
+import type { TxIntent, TransferAction } from "@clavion/types";
+
+// ---------- ISCLClient (simplified) ----------
+
+class ISCLClient {
+  constructor(private baseUrl = process.env["ISCL_API_URL"] ?? "http://127.0.0.1:3000") {}
+
+  private async post<T>(path: string, data: unknown): Promise<T> {
+    const res = await fetch(`${this.baseUrl}${path}`, {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json" },
+      body: JSON.stringify(data),
+    });
+    const body = await res.json();
+    if (!res.ok) throw new Error(`ISCL ${res.status}: ${JSON.stringify(body)}`);
+    return body as T;
+  }
+
+  txApproveRequest(intent: TxIntent) {
+    return this.post<{ approved: boolean; approvalTokenId?: string; intentId: string; reason?: string }>(
+      "/v1/tx/approve-request", intent,
+    );
+  }
+
+  txSignAndSend(payload: { intent: TxIntent; approvalTokenId?: string }) {
+    return this.post<{ txHash: string; broadcast: boolean; intentId: string }>(
+      "/v1/tx/sign-and-send", payload,
+    );
+  }
+}
+
+// ---------- Intent builder ----------
+
+function buildIntent(wallet: string, action: TransferAction, chainId = 8453): TxIntent {
+  const now = Math.floor(Date.now() / 1000);
+  return {
+    version: "1", id: randomUUID(), timestamp: now,
+    chain: { type: "evm", chainId },
+    wallet: { address: wallet },
+    action,
+    constraints: { maxGasWei: "1000000000000000", deadline: now + 600, maxSlippageBps: 100 },
+    metadata: { source: "minimal-adapter" },
+  };
+}
+
+// ---------- Transfer handler ----------
+
+export async function transfer(
+  wallet: string, token: string, to: string, amount: string, chainId?: number,
+) {
+  const client = new ISCLClient();
+  const action: TransferAction = { type: "transfer", asset: { kind: "erc20", address: token }, to, amount };
+  const intent = buildIntent(wallet, action, chainId);
+
+  const approval = await client.txApproveRequest(intent);
+  if (!approval.approved) return { error: `Denied: ${approval.reason ?? "user_declined"}` };
+
+  const result = await client.txSignAndSend({ intent, approvalTokenId: approval.approvalTokenId });
+  return { txHash: result.txHash, broadcast: result.broadcast };
+}
+```
+
+To integrate this with your framework, call `transfer()` from whatever command, tool, or action handler your framework provides.
+
+## Further Reading
+
+- [API Reference](../api/overview.md) -- Full endpoint documentation and response schemas
+- [TxIntent & SkillManifest Schemas](../api/schemas.md) -- Detailed schema definitions
+- [Architecture: Trust Domains](../architecture/engineering-spec.md) -- Domain A/B/C boundaries
+- [Development Setup](./dev-setup.md) -- Local development environment
+- [Repository Structure](./repo-structure.md) -- Package layout and dependencies

@@ -5,14 +5,15 @@
  * Environment:
  *   ISCL_DEMO_PASSPHRASE — passphrase for test keystore (default: "test-passphrase-123")
  *   ISCL_AUTO_APPROVE    — "true" to auto-approve all transactions (default: false)
- *   BASE_RPC_URL         — Anvil fork URL
+ *   BASE_RPC_URL         — Anvil fork URL (legacy, maps to chain 8453)
+ *   ISCL_RPC_URL_{chainId} — Per-chain RPC URLs (e.g., ISCL_RPC_URL_1, ISCL_RPC_URL_8453)
  *
  * Usage:
  *   node dist/core/demo-boot.js
  */
 
 import { buildApp } from "./api/app.js";
-import { ViemRpcClient } from "./rpc/viem-rpc-client.js";
+import { buildRpcClient } from "./rpc/build-rpc-client.js";
 import { EncryptedKeystore } from "@clavion/signer";
 
 const PORT = Number(process.env.ISCL_PORT ?? 3100);
@@ -21,20 +22,20 @@ const PASSPHRASE = process.env.ISCL_DEMO_PASSPHRASE ?? "test-passphrase-123";
 const AUTO_APPROVE = process.env.ISCL_AUTO_APPROVE === "true";
 
 async function main(): Promise<void> {
-  const rpcUrl = process.env["BASE_RPC_URL"];
-  const rpcClient = rpcUrl ? new ViemRpcClient(rpcUrl) : undefined;
+  const rpcClient = buildRpcClient(process.env as Record<string, string | undefined>);
   const auditDbPath = process.env["ISCL_AUDIT_DB"] ?? "./iscl-audit.sqlite";
   const keystorePath = process.env["ISCL_KEYSTORE_PATH"];
 
-  // Auto-approve prompt function for demo
-  const promptFn = AUTO_APPROVE ? async () => true : undefined;
+  // Resolve approval mode: env var takes precedence, then AUTO_APPROVE fallback
+  const envMode = process.env["ISCL_APPROVAL_MODE"] as "cli" | "web" | "auto" | undefined;
+  const approvalMode = envMode ?? (AUTO_APPROVE ? "auto" : "cli");
 
   const app = await buildApp({
     logger: true,
     rpcClient,
     auditDbPath,
     keystorePath,
-    promptFn,
+    approvalMode,
   });
 
   // Unlock all keys in keystore on the app's keystore instance
@@ -57,13 +58,23 @@ async function main(): Promise<void> {
   try {
     await app.listen({ port: PORT, host: HOST });
     console.log(`[demo-boot] ISCL Core listening on ${HOST}:${PORT}`);
-    if (AUTO_APPROVE) {
-      console.log(`[demo-boot] Auto-approve mode ENABLED (demo only)`);
+    console.log(`[demo-boot] Approval mode: ${approvalMode}`);
+    if (approvalMode === "web") {
+      console.log(`[demo-boot] Web approval UI: http://${HOST}:${PORT}/approval-ui`);
     }
   } catch (err) {
     console.error("[demo-boot] Failed to start:", err);
     process.exit(1);
   }
+
+  // Graceful shutdown on SIGTERM/SIGINT
+  const shutdown = async (signal: string) => {
+    console.log(`[demo-boot] Received ${signal}, shutting down gracefully…`);
+    await app.close();
+    process.exit(0);
+  };
+  process.on("SIGTERM", () => void shutdown("SIGTERM"));
+  process.on("SIGINT", () => void shutdown("SIGINT"));
 }
 
 main();

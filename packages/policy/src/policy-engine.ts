@@ -1,4 +1,5 @@
 import type { TxIntent, PolicyConfig, PolicyDecision } from "@clavion/types";
+import { extractTokenAddresses, extractContractAddress } from "@clavion/types";
 
 export interface EvaluateOptions {
   riskScore?: number;
@@ -136,33 +137,6 @@ export function evaluate(
     reasons.push("All checks passed");
   }
   return { decision: "allow", reasons, policyVersion: config.version };
-}
-
-function extractTokenAddresses(intent: TxIntent): string[] {
-  const action = intent.action;
-  switch (action.type) {
-    case "transfer":
-    case "approve":
-      return [action.asset.address];
-    case "swap_exact_in":
-    case "swap_exact_out":
-      return [action.assetIn.address, action.assetOut.address];
-    default:
-      return [];
-  }
-}
-
-function extractContractAddress(intent: TxIntent): string | undefined {
-  const action = intent.action;
-  switch (action.type) {
-    case "approve":
-      return action.spender;
-    case "swap_exact_in":
-    case "swap_exact_out":
-      return action.router;
-    default:
-      return undefined;
-  }
 }
 
 function extractValue(intent: TxIntent): string | undefined {

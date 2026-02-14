@@ -1,0 +1,43 @@
+---
+title: Core Concepts
+description: Understand the mental model behind Clavion -- trust domains, transaction lifecycle, policy enforcement, and approval flows.
+---
+
+## What you will learn
+
+- How Clavion's architecture provides key isolation through trust domains
+- The complete transaction execution pipeline
+- How policy rules control what transactions are allowed
+- How the approval model balances security with automation
+
+## Concept map
+
+Clavion's security model rests on four foundational concepts:
+
+<CardGroup cols={2}>
+  <Card title="Architecture" icon="sitemap" href="/concepts/architecture">
+    System components, package layout, and how they interconnect.
+  </Card>
+  <Card title="Trust Domains" icon="shield-halved" href="/concepts/trust-domains">
+    The three-domain isolation model that keeps keys safe from untrusted code.
+  </Card>
+  <Card title="Transaction Lifecycle" icon="arrows-spin" href="/concepts/transaction-lifecycle">
+    Every step from intent submission to on-chain confirmation.
+  </Card>
+  <Card title="Policy Engine" icon="gavel" href="/concepts/policy-engine">
+    Configurable rules that decide which transactions are allowed, denied, or require approval.
+  </Card>
+</CardGroup>
+
+<Card title="Approval Model" icon="user-check" href="/concepts/approval-model">
+  Human-in-the-loop confirmation with CLI, web dashboard, and Telegram support.
+</Card>
+
+## Design philosophy
+
+Clavion is intentionally conservative:
+
+- **Closed action set.** Only five transaction types are supported (transfer, transfer_native, approve, swap_exact_in, swap_exact_out). No arbitrary calldata signing.
+- **Fail-closed defaults.** The default policy denies all value-bearing transactions. You must explicitly configure limits.
+- **Defense in depth.** Multiple independent enforcement layers (schema validation, policy engine, preflight simulation, approval flow, audit trail) ensure no single failure compromises the system.
+- **Intent, not execution.** Agents express what they want to do. Clavion decides how (and whether) to do it.

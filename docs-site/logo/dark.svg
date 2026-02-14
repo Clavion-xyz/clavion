@@ -1,0 +1,14 @@
+<svg width="120" height="28" viewBox="0 0 120 28" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Icon -->
+  <g transform="translate(0, 0)">
+    <path d="M7 1C4 1 2 3.5 2 6V22C2 24.5 4 27 7 27" stroke="#00ff9d" stroke-width="1.5" stroke-linecap="round" opacity="0.25"/>
+    <path d="M21 1C24 1 26 3.5 26 6V22C26 24.5 24 27 21 27" stroke="#00ff9d" stroke-width="1.5" stroke-linecap="round" opacity="0.25"/>
+    <path d="M9.5 5C7.5 5 6 6.5 6 8.5V19.5C6 21.5 7.5 23 9.5 23" stroke="#00ff9d" stroke-width="1.5" stroke-linecap="round" opacity="0.55"/>
+    <path d="M18.5 5C20.5 5 22 6.5 22 8.5V19.5C22 21.5 20.5 23 18.5 23" stroke="#00ff9d" stroke-width="1.5" stroke-linecap="round" opacity="0.55"/>
+    <path d="M12 9C11 9 10 10 10 11V17C10 18 11 19 12 19" stroke="#00ff9d" stroke-width="2" stroke-linecap="round"/>
+    <path d="M16 9C17 9 18 10 18 11V17C18 18 17 19 16 19" stroke="#00ff9d" stroke-width="2" stroke-linecap="round"/>
+    <circle cx="14" cy="14" r="1.8" fill="#00ff9d"/>
+  </g>
+  <!-- Wordmark -->
+  <text x="32" y="20" font-family="'JetBrains Mono', 'SF Mono', 'Fira Code', monospace" font-size="16" font-weight="600" fill="#ffffff" letter-spacing="-0.3">clavion</text>
+</svg>

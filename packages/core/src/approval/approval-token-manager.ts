@@ -1,6 +1,23 @@
 import Database from "better-sqlite3";
-import { randomUUID } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import type { ApprovalToken } from "@clavion/types";
+
+export type TokenValidationReason =
+  | "not_found"
+  | "expired"
+  | "consumed"
+  | "intent_mismatch"
+  | "hash_mismatch";
+
+export interface TokenValidationResult {
+  valid: boolean;
+  reason?: TokenValidationReason;
+}
+
+function safeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(Buffer.from(a), Buffer.from(b));
+}
 
 const CREATE_TABLE_SQL = `
   CREATE TABLE IF NOT EXISTS approval_tokens (
@@ -75,20 +92,38 @@ export class ApprovalTokenManager {
     };
   }
 
-  validate(tokenId: string, intentId: string, txRequestHash: string): boolean {
+  validate(tokenId: string, intentId: string, txRequestHash: string): TokenValidationResult {
     const row = this.findStmt.get(tokenId) as TokenRow | undefined;
-    if (!row) return false;
+    if (!row) return { valid: false, reason: "not_found" };
 
     const now = Math.floor(Date.now() / 1000);
-    const expired = now >= row.issued_at + row.ttl_seconds;
+    if (row.consumed !== 0) return { valid: false, reason: "consumed" };
+    if (now >= row.issued_at + row.ttl_seconds) return { valid: false, reason: "expired" };
+    if (!safeEqual(row.intent_id, intentId)) return { valid: false, reason: "intent_mismatch" };
+    if (!safeEqual(row.tx_request_hash, txRequestHash)) return { valid: false, reason: "hash_mismatch" };
 
-    return (
-      row.consumed === 0 && !expired && row.intent_id === intentId && row.tx_request_hash === txRequestHash
-    );
+    return { valid: true };
   }
 
   consume(tokenId: string): void {
     this.consumeStmt.run(tokenId);
+  }
+
+  validateAndConsume(tokenId: string, intentId: string, txRequestHash: string): TokenValidationResult {
+    const txn = this.db.transaction(() => {
+      const row = this.findStmt.get(tokenId) as TokenRow | undefined;
+      if (!row) return { valid: false, reason: "not_found" } as TokenValidationResult;
+
+      const now = Math.floor(Date.now() / 1000);
+      if (row.consumed !== 0) return { valid: false, reason: "consumed" } as TokenValidationResult;
+      if (now >= row.issued_at + row.ttl_seconds) return { valid: false, reason: "expired" } as TokenValidationResult;
+      if (!safeEqual(row.intent_id, intentId)) return { valid: false, reason: "intent_mismatch" } as TokenValidationResult;
+      if (!safeEqual(row.tx_request_hash, txRequestHash)) return { valid: false, reason: "hash_mismatch" } as TokenValidationResult;
+
+      this.consumeStmt.run(tokenId);
+      return { valid: true } as TokenValidationResult;
+    });
+    return txn();
   }
 
   cleanup(): void {

@@ -1,0 +1,233 @@
+---
+title: Production Deployment
+description: Deploy Clavion to production with Docker, security hardening, monitoring, and backup.
+---
+
+## What you will learn
+
+- How to deploy ISCL Core for production use
+- Security hardening checklist
+- Docker deployment with proper configuration
+- Monitoring, backup, and maintenance procedures
+
+## Deployment architecture
+
+```text
+┌─────────────────────────────────────────┐
+│  Production Host                        │
+│                                         │
+│  ┌──────────────────────────────┐       │
+│  │ Docker Compose               │       │
+│  │  ┌─────────┐  ┌───────────┐ │       │
+│  │  │ ISCL    │  │ Adapter   │ │       │
+│  │  │ Core    │  │ (optional)│ │       │
+│  │  └────┬────┘  └─────┬─────┘ │       │
+│  │       │ internal     │       │       │
+│  │       └──────────────┘       │       │
+│  └──────────────────────────────┘       │
+│       │ 127.0.0.1:3100 (localhost only) │
+│       ▼                                 │
+│  RPC Provider (Alchemy, Infura, etc.)   │
+└─────────────────────────────────────────┘
+```
+
+## Step 1: Docker setup
+
+### Build the image
+
+```bash
+docker build -f docker/Dockerfile.core -t clavion-core:latest .
+```
+
+### Docker Compose configuration
+
+```yaml
+services:
+  iscl-core:
+    image: clavion-core:latest
+    ports:
+      - "127.0.0.1:3100:3100"
+    environment:
+      ISCL_HOST: "0.0.0.0"
+      ISCL_PORT: "3100"
+      ISCL_APPROVAL_MODE: "web"
+      ISCL_RPC_URL_8453: "${ISCL_RPC_URL_8453}"
+      ISCL_KEYSTORE_PATH: "/home/iscl/.iscl/keystore"
+      ISCL_AUDIT_DB: "/home/iscl/.iscl/data/audit.sqlite"
+    volumes:
+      - keystore-data:/home/iscl/.iscl/keystore
+      - audit-data:/home/iscl/.iscl/data
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3100/v1/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+volumes:
+  keystore-data:
+  audit-data:
+```
+
+Key points:
+- `127.0.0.1:3100:3100` -- port is only accessible from localhost on the host
+- `0.0.0.0` inside the container so other containers can reach it on the Docker network
+- Named volumes for persistent keystore and audit data
+- Resource limits prevent runaway memory usage
+
+## Step 2: Security hardening
+
+### Checklist
+
+<Check>**Never use `ISCL_APPROVAL_MODE=auto` in production**. Use `web` or `cli`.</Check>
+<Check>**Set `ISCL_TELEGRAM_ALLOWED_CHATS`** if using the Telegram bot.</Check>
+<Check>**Configure a restrictive PolicyConfig** with appropriate value limits, token allowlists, and recipient allowlists.</Check>
+<Check>**Use a paid RPC provider** with authentication. Public endpoints are rate-limited and less reliable.</Check>
+<Check>**Do not expose port 3100 to the internet.** The API has no authentication by design.</Check>
+<Check>**Back up the keystore volume.** Keys are encrypted but irreplaceable if lost.</Check>
+<Check>**Set appropriate `maxTxPerHour`** to limit blast radius if an adapter is compromised.</Check>
+<Check>**Review audit logs regularly.** Look for unexpected `policy_evaluated` events or failed signing attempts.</Check>
+
+### Policy configuration
+
+Create a production policy file:
+
+```json
+{
+  "version": "1",
+  "maxValueWei": "1000000000000000000",
+  "maxApprovalAmount": "500000000000000000",
+  "contractAllowlist": [
+    "0x2626664c2603336E57B271c5C0b26F421741e481"
+  ],
+  "tokenAllowlist": [
+    "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    "0x4200000000000000000000000000000000000006"
+  ],
+  "allowedChains": [8453],
+  "recipientAllowlist": [],
+  "maxRiskScore": 30,
+  "requireApprovalAbove": { "valueWei": "100000000000000000" },
+  "maxTxPerHour": 10
+}
+```
+
+## Step 3: RPC configuration
+
+Use a paid provider for production. Configure per-chain:
+
+```bash
+ISCL_RPC_URL_1=https://eth-mainnet.g.alchemy.com/v2/YOUR_KEY
+ISCL_RPC_URL_8453=https://base-mainnet.g.alchemy.com/v2/YOUR_KEY
+```
+
+## Step 4: Monitoring
+
+### Health checks
+
+Poll the health endpoint:
+
+```bash
+curl -f http://localhost:3100/v1/health
+```
+
+### Log monitoring
+
+ISCL Core uses pino for structured JSON logging. Forward logs to your monitoring stack:
+
+```bash
+# Follow logs
+docker compose logs -f iscl-core
+
+# Pipe to a log aggregator
+docker compose logs -f iscl-core | your-log-forwarder
+```
+
+Set log level via environment:
+
+```bash
+LOG_LEVEL=warn  # Options: trace, debug, info, warn, error, fatal
+```
+
+### Key metrics
+
+| Metric | Source | Warning Threshold |
+|--------|--------|-------------------|
+| RPC response time | Application logs | >500ms average |
+| Pending approvals | `GET /v1/approvals/pending` | >10 stale requests |
+| SQLite DB size | File system | >1GB |
+| Memory usage | Docker stats | >400MB |
+
+## Step 5: Backup
+
+### Keystore backup
+
+The keystore contains encrypted private keys. Back up the Docker volume:
+
+```bash
+# Backup
+docker run --rm -v keystore-data:/data -v $(pwd):/backup alpine \
+  tar czf /backup/keystore-backup-$(date +%Y%m%d).tar.gz -C /data .
+
+# Restore
+docker run --rm -v keystore-data:/data -v $(pwd):/backup alpine \
+  tar xzf /backup/keystore-backup-20250214.tar.gz -C /data
+```
+
+### Audit database backup
+
+```bash
+docker run --rm -v audit-data:/data -v $(pwd):/backup alpine \
+  cp /data/audit.sqlite /backup/audit-backup-$(date +%Y%m%d).sqlite
+```
+
+<Warning>
+When backing up SQLite in WAL mode, copy all three files: `audit.sqlite`, `audit.sqlite-wal`, and `audit.sqlite-shm`. Or use the SQLite `.backup` command for a consistent copy.
+</Warning>
+
+## Step 6: Maintenance
+
+### Database vacuuming
+
+SQLite does not automatically reclaim space from deleted rate limit entries:
+
+```bash
+sqlite3 /path/to/audit.sqlite "VACUUM;"
+```
+
+Run during maintenance windows. VACUUM temporarily doubles disk usage.
+
+### Log rotation
+
+Docker handles log rotation via the logging driver. Configure in `daemon.json`:
+
+```json
+{
+  "log-driver": "json-file",
+  "log-opts": {
+    "max-size": "10m",
+    "max-file": "3"
+  }
+}
+```
+
+## Verification
+
+<Check>ISCL Core starts and passes health checks</Check>
+<Check>Port 3100 is only accessible from localhost</Check>
+<Check>Approval mode is `web` or `cli` (not `auto`)</Check>
+<Check>Policy config has appropriate limits</Check>
+<Check>Keystore backup procedure works and can be restored</Check>
+<Check>Logs are forwarded to your monitoring system</Check>
+
+## Next steps
+
+- [Configuration Reference](/reference/config-reference) -- All configuration options
+- [Policy Engine](/concepts/policy-engine) -- Tuning policy rules
+- [Approval Model](/concepts/approval-model) -- Choosing the right approval mode

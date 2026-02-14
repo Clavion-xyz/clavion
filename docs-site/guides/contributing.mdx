@@ -1,0 +1,317 @@
+---
+title: Contributing
+description: How to contribute to Clavion -- coding standards, security rules, and PR process.
+icon: code-pull-request
+---
+
+## What you will learn
+
+- The three ground rules that apply to every contribution
+- How to set up the development environment
+- Code organization by trust domain
+- Coding standards, naming conventions, and style rules
+- Testing requirements and security invariants
+- The pull request and commit process
+- Common gotchas that catch contributors
+
+## Ground rules
+
+Three rules apply to every change:
+
+<CardGroup cols={3}>
+  <Card title="Security First">
+    The six security invariants listed below are non-negotiable. No PR that weakens them will be merged.
+  </Card>
+  <Card title="Test Everything">
+    Every change must pass the existing test suite, and new features must include tests.
+  </Card>
+  <Card title="Respect Trust Domains">
+    Every line of code belongs to exactly one of the three trust domains. Never blur these boundaries.
+  </Card>
+</CardGroup>
+
+<Tip>
+If you are unsure whether a proposed change fits the architecture, open an issue to discuss before writing code.
+</Tip>
+
+## Getting started
+
+<Steps>
+  <Step title="Fork and clone">
+    ```bash
+    git clone https://github.com/<your-fork>/clavion.git
+    cd clavion
+    ```
+  </Step>
+  <Step title="Install dependencies">
+    Requires Node.js >= 20 and npm >= 9.
+
+    ```bash
+    npm install
+    ```
+  </Step>
+  <Step title="Build all packages">
+    TypeScript project references, compiled in dependency order.
+
+    ```bash
+    npm run build
+    ```
+  </Step>
+  <Step title="Run all tests">
+    Confirm a clean baseline.
+
+    ```bash
+    npm test
+    ```
+  </Step>
+  <Step title="Verify the server starts">
+    ```bash
+    npm start
+    curl http://localhost:3100/v1/health
+    # Expected: {"status":"ok","version":"0.1.0","uptime":...}
+    ```
+  </Step>
+</Steps>
+
+If any step fails, see the [Dev Setup Guide](/start/installation) for prerequisites (Anvil, Docker, environment variables).
+
+## Code organization
+
+The repository is an npm-workspaces monorepo with packages organized by trust domain. The trust domain model is the single most important architectural concept in this project.
+
+### Domain A -- Untrusted
+
+Adapters and plugins that run agent code. No keys, no direct RPC access, no signing.
+
+| Package | Description |
+|---------|-------------|
+| `@clavion/adapter-openclaw` | OpenClaw thin skill wrappers |
+| `@clavion/adapter-mcp` | MCP server for Claude Desktop, Cursor, IDEs |
+| `@clavion/plugin-eliza` | ElizaOS (ai16z) plugin with 5 actions |
+| `@clavion/adapter-telegram` | Telegram bot (agent + approval UI) |
+
+### Domain B -- Trusted
+
+The secure core. Keys, policy enforcement, signing, audit logging, RPC access.
+
+| Package | Description |
+|---------|-------------|
+| `@clavion/core` | API server, transaction builders, approval flow |
+| `@clavion/signer` | Encrypted keystore and signing |
+| `@clavion/audit` | Append-only audit trace (SQLite) |
+| `@clavion/policy` | Policy engine and config validation |
+| `@clavion/preflight` | Risk scoring and simulation |
+| `@clavion/registry` | Skill manifest validation and registry |
+| `@clavion/types` | Shared interfaces, schemas, RPC types |
+
+### Domain C -- Limited Trust
+
+Sandboxed execution. No key access, API-only communication with Core.
+
+| Package | Description |
+|---------|-------------|
+| `@clavion/sandbox` | Container isolation runner |
+
+### Tooling
+
+| Package | Description |
+|---------|-------------|
+| `@clavion/cli` | Key management CLI (import, generate, list) |
+| `@clavion/sdk` | SDK interface (stub, planned for v0.2) |
+
+Additional directories: `tests/` (cross-package integration, security, and E2E tests), `tools/` (fixture generation, hash utilities), `examples/`, `docs/`, `docker/`.
+
+## Coding standards
+
+### TypeScript
+
+<Tabs>
+  <Tab title="Core Rules">
+    - **Strict mode** is enforced (`strict: true` in the root tsconfig, plus `noUncheckedIndexedAccess`, `noUnusedLocals`, `noUnusedParameters`).
+    - **ESM with Node16 module resolution.** All packages use `"type": "module"` and the `Node16` module/moduleResolution settings.
+    - **`additionalProperties: false`** on every JSON schema. No undocumented fields are allowed to pass validation.
+    - **viem** is the preferred EVM library over ethers.
+  </Tab>
+  <Tab title="CJS/ESM Interop">
+    **Named imports for AJV:** use `import { Ajv } from "ajv"`. Default imports do not work under Node16.
+
+    **`createRequire` pattern** for CJS packages that lack ESM exports (`ajv-formats`, `canonicalize`):
+
+    ```typescript
+    import { createRequire } from "node:module";
+    const require = createRequire(import.meta.url);
+    const addFormats = require("ajv-formats");
+    ```
+  </Tab>
+</Tabs>
+
+### Naming conventions
+
+| Element | Convention | Examples |
+|---------|-----------|----------|
+| Files | kebab-case | `risk-scorer.ts`, `audit-trace-service.ts` |
+| Classes | PascalCase | `PolicyEngine`, `WalletService` |
+| Interfaces / Types | PascalCase | `TxIntent`, `PolicyConfig`, `RpcClient` |
+| Functions | camelCase | `buildFromIntent`, `computeRiskScore` |
+| Constants | UPPER_SNAKE_CASE | `MAX_SCORE`, `HIGH_SLIPPAGE_BPS` |
+
+### Code style
+
+- **Prettier** for formatting. Run `npm run format:check` before submitting.
+- **ESLint** for linting. Run `npm run lint` before submitting.
+- Follow the formatting conventions already present in the codebase. When in doubt, let Prettier decide.
+
+## Testing requirements
+
+All pull requests must satisfy:
+
+1. **`npm test` passes** -- this runs unit and integration tests.
+2. **New features include unit tests.** If you add a builder, service, route, or adapter method, add corresponding tests.
+3. **Fund-affecting features include security tests.** Changes to signing, policy enforcement, approval flow, or key management must include tests that verify Domain B integrity.
+4. **Mock RPC factories implement all `RpcClient` methods**, including `readNativeBalance`. Incomplete mocks cause runtime failures in unrelated tests.
+5. **Test fixtures live in `tools/fixtures/`.** When adding a new valid fixture, also add its pre-computed hash to `hash-fixtures.ts` (the canonicalization test iterates all entries).
+
+| Category | Command | Requirements |
+|----------|---------|-------------|
+| Unit | `npm run test:unit` | None |
+| Integration | `npm run test:integration` | None |
+| Security | `npm run test:security` | Docker (for sandbox tests) |
+| E2E | `npm run test:e2e` | Anvil + `BASE_RPC_URL` |
+
+<Note>
+Tests that require Docker or Anvil skip gracefully when those dependencies are unavailable.
+</Note>
+
+## Security rules (non-negotiable)
+
+These six invariants are the foundation of the project's security model. Every contributor must understand and uphold them.
+
+<Warning>
+These invariants are non-negotiable. Any PR that weakens any of them will not be merged.
+</Warning>
+
+1. **Private keys exist only in Domain B** -- never in Domain A (skills/adapters) or Domain C (sandbox).
+2. **Every signature passes PolicyEngine + Preflight** -- there are no bypass paths.
+3. **Skills have no direct RPC access** -- only ISCL Core contacts the blockchain.
+4. **All fund-affecting operations use TxIntent v1** -- no arbitrary calldata signing.
+5. **All critical steps are audit logged** -- correlated by `intentId`.
+6. **Approval tokens are single-use with TTL** -- no replay.
+
+### Additional design rules
+
+- New crypto logic goes in Domain B only, inside the appropriate package.
+- New skill-facing functionality must be exposed via the ISCL API, never through direct module access.
+- New external network calls must go through the RPC allowlist in Domain B.
+- Sandbox code belongs to Domain C: no key access, no unrestricted network.
+- Cross-domain communication always goes through the ISCL Core API (localhost HTTP).
+
+<Tip>
+If your change touches signing, key management, policy enforcement, or approval flow, flag it in the PR description. These changes receive extra review scrutiny.
+</Tip>
+
+## Pull request process
+
+<Steps>
+  <Step title="Create a feature branch">
+    ```bash
+    git checkout -b feat/my-feature main
+    ```
+  </Step>
+  <Step title="Write code and tests">
+    Follow the coding standards and testing requirements above.
+  </Step>
+  <Step title="Run linting and formatting checks">
+    ```bash
+    npm run lint
+    npm run format:check
+    ```
+  </Step>
+  <Step title="Run the full test suite">
+    ```bash
+    npm run build
+    npm test
+    ```
+
+    All tests must pass. If you have Docker available, also run `npm run test:security`.
+  </Step>
+  <Step title="Submit a pull request">
+    Include a clear description of what changed and why:
+
+    - A summary of the change (what problem it solves or what feature it adds).
+    - Which trust domain(s) the change touches.
+    - How it was tested.
+  </Step>
+  <Step title="PR review">
+    Security-sensitive changes (Domain B, key management, policy, approval) require extra scrutiny and may take longer to review.
+  </Step>
+  <Step title="Merge to main">
+    After approval.
+  </Step>
+</Steps>
+
+## Commit style
+
+The project follows [Conventional Commits](https://www.conventionalcommits.org/). Use the appropriate prefix for each commit.
+
+| Prefix | Purpose | Example |
+|--------|---------|---------|
+| `feat:` | New feature | `feat: add swap_exact_out support for 1inch` |
+| `fix:` | Bug fix | `fix: prevent approval token replay across intents` |
+| `chore:` | Maintenance tasks | `chore: remove old doc/ directory` |
+| `build:` | Build system changes | `build: move Docker files to docker/` |
+| `docs:` | Documentation only | `docs: add community files and restructure documentation` |
+| `refactor:` | Code restructuring (no behavior change) | `refactor: extract @clavion/types package` |
+| `test:` | Test additions or changes | `test: add Domain B integrity tests for replay protection` |
+
+Keep commit messages concise. The first line should be under 72 characters. Use the body for additional context when needed.
+
+## Common gotchas
+
+These are recurring pitfalls that have caught contributors before. Save yourself debugging time by reading them.
+
+<Accordion title="JSON Schema validates structure only">
+Business logic like deadline expiration must be enforced in code, not in the schema. The schema validates types, patterns, and required fields -- it does not enforce runtime constraints.
+</Accordion>
+
+<Accordion title="TxIntentSchema $defs/$ref with AJV">
+When embedding the schema in a wrapper object, hoist `$defs` to the wrapper root. AJV cannot resolve `$ref` that points into a nested `$defs`.
+</Accordion>
+
+<Accordion title="Fastify custom AJV does not coerce types">
+The server uses `strict: true`, so query parameters arrive as strings. Use `type: "string"` with a `pattern` in route schemas, not `type: "integer"`.
+</Accordion>
+
+<Accordion title="Tests with requireApprovalAbove.valueWei: '0' must pass promptFn">
+Without passing `promptFn` to `buildApp()`, the approval service falls through to readline and the test hangs indefinitely.
+</Accordion>
+
+<Accordion title="Hash fixtures must stay in sync">
+When you add a new valid fixture to `tools/fixtures/valid-intents.ts`, you must also add its canonical hash to `tools/fixtures/hash-fixtures.ts`. The canonicalization test iterates all entries.
+</Accordion>
+
+<Accordion title="buildFromIntent() is async">
+The 1inch swap builder returns a Promise. All call sites must `await` it. Missing `await` will result in a `[object Promise]` being used as the transaction data.
+</Accordion>
+
+<Accordion title="CJS interop requires createRequire">
+Packages like `ajv-formats` and `canonicalize` do not have proper ESM exports. Always use the `createRequire` pattern:
+
+```typescript
+import { createRequire } from "node:module";
+const require = createRequire(import.meta.url);
+const addFormats = require("ajv-formats");
+```
+</Accordion>
+
+## Questions and feedback
+
+- **Bugs and feature requests:** Open an issue on GitHub with a clear description and reproduction steps.
+- **Environment setup problems:** See the [Installation Guide](/start/installation) for prerequisites and environment variables.
+- **Architecture questions:** See [Architecture](/concepts/architecture) and [Trust Domains](/concepts/trust-domains).
+- [API Reference](/reference/rest-api) and [TxIntent Schema](/reference/txintent-schema) for API and schema details.
+
+## Next steps
+
+- [Testing Guide](/guides/testing) -- Full testing guide with fixtures and CI details
+- [Trust Domains](/concepts/trust-domains) -- The three-domain security model
+- [Policy Engine](/concepts/policy-engine) -- Policy rules and enforcement

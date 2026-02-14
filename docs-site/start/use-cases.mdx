@@ -1,0 +1,141 @@
+---
+title: Use Cases
+description: Real-world scenarios where Clavion adds value
+icon: lightbulb
+---
+
+## The core problem
+
+AI agents (ChatGPT, Claude, OpenClaw, etc.) are increasingly capable of *planning* financial actions, but you would never give one your private key. Clavion is the missing layer: **let AI do crypto tasks for you, with guardrails, without exposing your keys.**
+
+## Concrete scenarios
+
+<CardGroup cols={2}>
+  <Card title="AI Crypto Assistant" icon="comments">
+    Talk in plain English. The agent handles contract calls, gas, and routing. You just approve.
+  </Card>
+  <Card title="Batch Payments" icon="money-bills">
+    Pay multiple contributors in one conversation, one approval. No repetitive wallet interactions.
+  </Card>
+  <Card title="Swap With Guardrails" icon="shield-check">
+    Simulate first, enforce slippage caps and value limits. Policy denies hallucinated amounts automatically.
+  </Card>
+  <Card title="Delegated Access" icon="key">
+    Give an AI agent spending limits like a corporate credit card. Allowlists restrict scope.
+  </Card>
+</CardGroup>
+
+### 1. AI Crypto Assistant -- Talk to Do Transactions
+
+You open OpenClaw and type in plain English:
+
+> "Send 50 USDC to 0xAlice"
+
+The agent figures out the contract, builds the transaction, and Clavion shows you a summary:
+
+```text
+Transfer 50 USDC -> 0xAlice
+Risk score: 12/100 (low)
+[Approve] [Deny]
+```
+
+You hit approve, it signs and broadcasts. You never touched a wallet UI, never copy-pasted an address into MetaMask, never worried about gas settings. The agent handled all of that, but your key never left your machine.
+
+<Tip>
+This is especially valuable for people who find wallet UIs intimidating or error-prone. The AI handles the technical complexity while Clavion provides the security guardrails.
+</Tip>
+
+### 2. Batch Payments
+
+You run a small project and pay 5 contributors monthly in USDC:
+
+> "Pay Alice 500 USDC, Bob 300 USDC, Carol 200 USDC, Dave 150 USDC, Eve 100 USDC"
+
+The agent generates 5 transfer intents. You review a single summary and approve. Without this, you would manually do 5 separate MetaMask transactions, copy-pasting each address and amount -- a process that is slow and error-prone.
+
+### 3. Swap With Guardrails
+
+> "Swap 1000 USDC to ETH on Uniswap"
+
+Clavion simulates the swap first, shows you the expected output and slippage, and flags risk if it is high. The policy engine enforces:
+
+- **Max transaction value** you configured (e.g., $5,000)
+- **Slippage cap** (e.g., 1%)
+- **Rate limit** (e.g., max 10 txs/hour)
+
+<Warning>
+If the agent hallucinates and tries to swap $50,000 instead, the policy engine denies it automatically. The agent literally cannot exceed your configured limits.
+</Warning>
+
+### 4. Delegated Access With Spending Limits
+
+You give a trading bot or an AI agent access to operate, but with a policy:
+
+```json
+{
+  "maxValuePerTx": "5000000000",
+  "maxTxPerHour": 5,
+  "allowedTokens": ["0xUSDC", "0xWETH"],
+  "allowedRecipients": ["0xUniswapRouter"]
+}
+```
+
+The agent can do swaps between USDC and WETH on Uniswap, up to $5K per transaction, max 5 per hour. It **cannot** send funds to random addresses, touch tokens outside the allowlist, or exceed the rate limit.
+
+<Note>
+This is like giving someone a corporate credit card with spending limits -- useful autonomy with real constraints.
+</Note>
+
+### 5. Audit Trail for Compliance
+
+Every action the AI took is logged:
+
+```text
+[12:01] intent_created: transfer 50 USDC -> 0xAlice (intentId: abc123)
+[12:01] policy_evaluated: allow (risk: 12)
+[12:01] approval_requested: user prompted
+[12:02] approval_granted: token issued
+[12:02] tx_signed: 0x...
+[12:02] tx_broadcast: hash 0x...
+```
+
+If something goes wrong, you have a full forensic trail. For teams or DAOs, this is critical accountability -- who approved what, when, and why.
+
+### 6. Safe Experimentation With DeFi
+
+New to DeFi? Tell the agent:
+
+> "Approve Uniswap to spend 100 USDC, then swap 100 USDC for ETH"
+
+Clavion's preflight simulation runs the transaction against the actual chain state *before* signing. It shows you the expected balance changes:
+
+```text
+You will send: 100 USDC
+You will receive: ~0.032 ETH
+Risk score: 18/100
+```
+
+<Tip>
+If the simulation reverts (e.g., insufficient balance, bad contract), it tells you **before** you spend gas. This is training wheels for DeFi -- the AI explains what is happening, the system verifies it is safe.
+</Tip>
+
+## Why not just use MetaMask?
+
+| Scenario | MetaMask | Clavion + AI Agent |
+|----------|----------|-------------------|
+| Send tokens | Manually enter address, amount, gas | "Send 50 USDC to Alice" |
+| Batch payments | 5 manual transactions | One conversation, one approval |
+| Spending limits | None -- full access always | Configurable policy engine |
+| Audit trail | Etherscan only | Full local audit with intent correlation |
+| Simulation before signing | Limited | Built-in preflight with risk score |
+| AI integration | None | Native -- the whole point |
+
+## Summary
+
+Clavion lets you **talk to an AI to do crypto transactions safely** -- the AI plans, you approve, your keys stay local, and everything has guardrails and an audit trail.
+
+## Next steps
+
+- [Quickstart](/start/quickstart) -- Try Clavion in 5 minutes
+- [Architecture](/concepts/architecture) -- Understand how the system is organized
+- [Policy Engine](/concepts/policy-engine) -- Configure guardrails for your use case

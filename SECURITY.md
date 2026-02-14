@@ -12,7 +12,7 @@ If you discover a security vulnerability in Clavion / ISCL, please report it res
 
 **Do not open a public GitHub issue for security vulnerabilities.**
 
-Email: **security@clavion.xyz**
+Email: **Clavion.xyz@proton.me**
 
 ### What to include
 

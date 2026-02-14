@@ -105,6 +105,38 @@ export const validTransferNativeIntent: TxIntent = {
   },
 };
 
+export const validSwapExactInOneInchIntent: TxIntent = {
+  version: "1",
+  id: "550e8400-e29b-41d4-a716-446655440005",
+  timestamp: 1700000000,
+  chain: { type: "evm", chainId: 8453 },
+  wallet: { address: "0x1234567890abcdef1234567890abcdef12345678" },
+  action: {
+    type: "swap_exact_in",
+    router: "0x111111125421cA6dc452d289314280a0f8842A65",
+    provider: "1inch",
+    assetIn: {
+      kind: "erc20",
+      address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      symbol: "USDC",
+      decimals: 6,
+    },
+    assetOut: {
+      kind: "erc20",
+      address: "0x4200000000000000000000000000000000000006",
+      symbol: "WETH",
+      decimals: 18,
+    },
+    amountIn: "1000000",
+    minAmountOut: "400000000000000",
+  },
+  constraints: {
+    maxGasWei: "2000000000000000",
+    deadline: 1700003600,
+    maxSlippageBps: 100,
+  },
+};
+
 export const validSwapExactOutIntent: TxIntent = {
   version: "1",
   id: "550e8400-e29b-41d4-a716-446655440003",

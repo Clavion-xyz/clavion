@@ -1,12 +1,32 @@
 import {
   randomBytes,
-  scryptSync,
+  scrypt as scryptCb,
   createCipheriv,
   createDecipheriv,
 } from "node:crypto";
+
+interface ScryptOptions { N: number; r: number; p: number }
+function scryptAsync(
+  password: string | Buffer,
+  salt: string | Buffer,
+  keylen: number,
+  options: ScryptOptions,
+): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    scryptCb(password, salt, keylen, options, (err, key) => {
+      if (err) reject(err);
+      else resolve(key);
+    });
+  });
+}
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { privateKeyToAddress } from "viem/accounts";
+import {
+  deriveMnemonicKey,
+  isValidMnemonic,
+  type MnemonicImportOptions,
+} from "./mnemonic.js";
 
 interface KeystoreMetadata {
   version: "1";
@@ -73,7 +93,7 @@ export class EncryptedKeystore {
 
     // Encrypt
     const salt = randomBytes(32);
-    const derivedKey = scryptSync(passphrase, salt, KEY_LENGTH, {
+    const derivedKey = await scryptAsync(passphrase, salt, KEY_LENGTH, {
       N: this.scryptN,
       r: DEFAULT_SCRYPT_R,
       p: DEFAULT_SCRYPT_P,
@@ -130,7 +150,7 @@ export class EncryptedKeystore {
 
     // Decrypt
     const salt = Buffer.from(encrypted.kdfParams.salt, "hex");
-    const derivedKey = scryptSync(passphrase, salt, KEY_LENGTH, {
+    const derivedKey = await scryptAsync(passphrase, salt, KEY_LENGTH, {
       N: encrypted.kdfParams.n,
       r: encrypted.kdfParams.r,
       p: encrypted.kdfParams.p,
@@ -154,6 +174,8 @@ export class EncryptedKeystore {
     }
 
     const privateKey = `0x${decrypted.toString("utf-8")}` as `0x${string}`;
+    // Zero the decryption buffer — key material is now in the string
+    decrypted.fill(0);
 
     // Verify address matches
     const derivedAddress = privateKeyToAddress(privateKey).toLowerCase();
@@ -183,5 +205,26 @@ export class EncryptedKeystore {
 
   isUnlocked(address: string): boolean {
     return this.unlockedKeys.has(address.toLowerCase());
+  }
+
+  /**
+   * Import a wallet from a BIP-39 mnemonic phrase.
+   * Derives a private key at the given HD path and stores it encrypted.
+   * The mnemonic itself is never stored — only the derived private key.
+   */
+  async importMnemonic(
+    mnemonic: string,
+    passphrase: string,
+    options?: MnemonicImportOptions & { profile?: string },
+  ): Promise<{ address: string; derivationPath: string }> {
+    if (!isValidMnemonic(mnemonic)) {
+      throw new Error("Invalid BIP-39 mnemonic");
+    }
+    const { privateKey, address, derivationPath } = deriveMnemonicKey(
+      mnemonic,
+      options,
+    );
+    await this.importKey(privateKey, passphrase, options?.profile);
+    return { address, derivationPath };
   }
 }

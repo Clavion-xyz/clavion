@@ -81,6 +81,10 @@ Agent Skill -> TxIntent -> /tx/build -> Preflight Simulation
 - **Skill Registry** -- Manifest validation, ECDSA signature verification, file hash integrity, and static analysis scanning
 - **Docker Sandbox** -- Container isolation with network disabled, read-only filesystem, seccomp profiles, and all capabilities dropped
 - **Native ETH and ERC-20 Support** -- Transfer, approve, and swap operations for both native ETH and ERC-20 tokens
+- **Multi-Chain Support** -- Ethereum, Optimism, Arbitrum, and Base with per-chain RPC routing
+- **Web Approval Dashboard** -- Browser-based approval UI with risk visualization, balance diffs, and transaction history
+- **DEX Aggregation** -- Uniswap V3 built-in, 1inch Swap API v6 optional with automatic fallback
+- **Agent Integrations** -- MCP server (Claude Desktop, Cursor), ElizaOS plugin, Telegram bot, OpenClaw adapter
 - **Rate Limiting** -- Per-wallet transaction rate limits enforced across all fund-affecting endpoints
 
 ## Package Structure
@@ -98,8 +102,11 @@ Clavion is organized as a monorepo with the following packages:
 | `packages/sandbox` | `@clavion/sandbox` | Docker-based container isolation runner |
 | `packages/core` | `@clavion/core` | Fastify API server, route handlers, service wiring |
 | `packages/adapter-openclaw` | `@clavion/adapter-openclaw` | OpenClaw skill wrappers and ISCL client |
+| `packages/adapter-mcp` | `@clavion/adapter-mcp` | MCP server for Claude Desktop, Cursor, and IDEs |
+| `packages/plugin-eliza` | `@clavion/plugin-eliza` | ElizaOS (ai16z) plugin with 5 secure actions |
+| `packages/adapter-telegram` | `@clavion/adapter-telegram` | Telegram bot with inline approval UI |
+| `packages/cli` | `@clavion/cli` | Key management CLI (import, generate, list) |
 | `packages/sdk` | `@clavion/sdk` | SDK for external integrations |
-| `packages/cli` | `@clavion/cli` | Command-line interface |
 
 ## Quick Start
 
@@ -165,6 +172,10 @@ docker compose --profile demo up -d
 | `POST` | `/v1/tx/sign-and-send` | Sign and broadcast (requires approval token) |
 | `GET` | `/v1/tx/:hash` | Get transaction receipt |
 | `GET` | `/v1/balance/:token/:account` | ERC-20 or native balance lookup |
+| `GET` | `/v1/approvals/pending` | List pending web approval requests |
+| `POST` | `/v1/approvals/:id/decide` | Submit approve/deny decision |
+| `GET` | `/v1/approvals/history` | Recent audit events |
+| `GET` | `/approval-ui` | Web approval dashboard (HTML) |
 | `POST` | `/v1/skills/register` | Register a skill manifest |
 | `GET` | `/v1/skills` | List registered skills |
 | `GET` | `/v1/skills/:name` | Get skill by name |
@@ -172,15 +183,18 @@ docker compose --profile demo up -d
 
 ## Documentation
 
-Detailed documentation is available in the following locations:
+Detailed documentation is available in the `docs/` directory:
 
-- **[Setup Guide](doc/SETUP.md)** -- Installation and configuration
-- **[API Reference](doc/API_REFERENCE.md)** -- Full endpoint documentation
-- **[Adapter Guide](doc/ADAPTER_GUIDE.md)** -- Building agent integrations
-- **[Engineering Specification](doc/ISCL%20Engineering%20Specification%20v0.1.md)** -- Master technical spec
-- **[Security Blueprint](doc/ISCL%20Security%20Blueprint%20v0.1_eng.md)** -- Threat model and security analysis
-- **[Whitepaper](doc/Clavion_Whitepaper_v1.md)** -- Project vision and design rationale
-- **[Roadmap](ROADMAP.md)** -- Development roadmap and milestones
+- **[Quick Start](docs/quickstart.md)** -- Get running in 5 minutes
+- **[Setup Guide](docs/development/dev-setup.md)** -- Environment variables, policy, Docker
+- **[API Reference](docs/api/overview.md)** -- All endpoints with examples
+- **[Architecture](docs/architecture/overview.md)** -- Three-domain trust model
+- **[Engineering Spec](docs/architecture/engineering-spec.md)** -- Master technical specification
+- **[Threat Model](docs/architecture/threat-model.md)** -- Security analysis and mitigations
+- **[Whitepaper](docs/architecture/whitepaper.md)** -- Project vision and design rationale
+- **[Integration Roadmap](docs/alpha-integrations.md)** -- MCP, Telegram, ElizaOS, 1inch, and more
+- **[Use Cases](docs/use-cases.md)** -- Real-world scenarios and examples
+- **[Testing Guide](docs/development/testing.md)** -- How to run each test category
 
 ## Security
 

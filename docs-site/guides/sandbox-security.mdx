@@ -1,0 +1,181 @@
+---
+title: Sandbox Security
+description: Understand the container isolation model and how Domain C protects the system from untrusted skill code.
+---
+
+## What you will learn
+
+- How Docker containers isolate skill execution
+- What restrictions are applied and why
+- How to test sandbox enforcement
+- How to write skills that work within the restrictions
+
+## Overview
+
+Domain C (the sandbox) runs untrusted skill code inside Docker containers with aggressive restrictions. The goal: even if the skill code is malicious, it cannot access private keys, exfiltrate data, or affect other processes.
+
+## Container restrictions
+
+| Restriction | Docker Flag | Effect |
+|-------------|-------------|--------|
+| No network | `--network none` | Cannot reach the internet or other containers |
+| Read-only filesystem | `--read-only` | Cannot write to disk (except `/tmp`) |
+| Writable temp only | `--tmpfs /tmp:rw,noexec,size=64m` | 64MB non-executable temp space |
+| Memory limit | `--memory {N}m` | Hard memory cap from manifest (1-512 MB) |
+| CPU limit | `--cpus 0.5` | Half a CPU core |
+| No capabilities | `--cap-drop ALL` | All Linux capabilities removed |
+| No privilege escalation | `--security-opt no-new-privileges` | Cannot gain new privileges |
+| No process spawning | seccomp profile | Blocks `clone`, `fork`, `exec` syscalls |
+
+## What the restrictions prevent
+
+### No network access
+
+The container cannot make outbound connections. This prevents:
+- Exfiltrating data to attacker-controlled servers
+- Downloading additional payloads
+- Communicating with C2 infrastructure
+- Making unauthorized RPC calls
+
+The one exception: the container receives `ISCL_API_URL` as an environment variable for communicating with ISCL Core. In Docker Compose, this works through the internal Docker network.
+
+### No filesystem access
+
+The root filesystem is read-only. The container cannot:
+- Write to the host filesystem
+- Access the keystore directory
+- Modify system files
+- Create persistent backdoors
+
+Only `/tmp` is writable, with a 64MB size limit and `noexec` flag (cannot execute files from `/tmp`).
+
+### No process spawning
+
+When `allowSpawn: false` (the default), a seccomp profile blocks process-spawning syscalls:
+- `clone` -- cannot create threads or child processes
+- `fork` -- cannot fork the process
+- `exec` -- cannot execute binaries
+
+This prevents fork bombs, container escapes via PID namespace manipulation, and execution of unexpected binaries.
+
+### Resource limits
+
+| Resource | Limit | Effect on Exhaustion |
+|----------|-------|---------------------|
+| Memory | Manifest-defined (max 512MB) | Container killed (OOM, exit code 137) |
+| CPU | 0.5 cores | Throttled, not killed |
+| Time | Manifest-defined (max 60s) | Container killed (SIGKILL) |
+| Output buffer | 10MB | Truncated |
+
+## Testing sandbox enforcement
+
+The project includes automated sandbox security tests at `tests/security/sandbox-isolation.test.ts`. These tests verify:
+
+```bash
+npm run test:security
+```
+
+### What the tests verify
+
+1. **Network isolation** -- Container cannot reach external hosts
+2. **Filesystem isolation** -- Container cannot read host paths
+3. **Process isolation** -- Container cannot spawn child processes (when `allowSpawn: false`)
+4. **Timeout enforcement** -- Container is killed after the configured timeout
+5. **Memory limit** -- Container is killed when exceeding the memory limit
+
+### Manual testing
+
+Test a skill with full sandbox restrictions:
+
+```bash
+docker run --rm \
+  --network none \
+  --read-only \
+  --tmpfs /tmp:rw,noexec,size=64m \
+  --memory 128m \
+  --cpus 0.5 \
+  --cap-drop ALL \
+  --security-opt no-new-privileges \
+  --env ISCL_API_URL=http://host.docker.internal:3100 \
+  --env ISCL_SKILL_NAME=test-skill \
+  iscl-skill-test:latest
+```
+
+## Writing sandbox-compatible skills
+
+Skills must work within the restrictions:
+
+<Tabs>
+  <Tab title="Do">
+    - Read from environment variables (`ISCL_API_URL`, `ISCL_SKILL_NAME`)
+    - Write temporary data to `/tmp`
+    - Communicate with ISCL Core via HTTP (through Docker network)
+    - Output structured JSON to stdout
+    - Exit with code 0 on success, non-zero on failure
+  </Tab>
+  <Tab title="Don't">
+    - Import `child_process`, `fs` (write), or `net`
+    - Attempt outbound network connections
+    - Write to the root filesystem
+    - Fork or exec processes
+    - Hardcode secrets or credentials
+    - Consume more memory than declared in the manifest
+  </Tab>
+</Tabs>
+
+## Skill manifest security fields
+
+The `sandbox` section of the SkillManifest controls container restrictions:
+
+```json
+{
+  "sandbox": {
+    "memoryMb": 128,
+    "timeoutMs": 30000,
+    "allowSpawn": false
+  }
+}
+```
+
+| Field | Default | Impact |
+|-------|---------|--------|
+| `memoryMb` | 128 | Higher = more room for data processing |
+| `timeoutMs` | 30000 | Higher = more time for long computations |
+| `allowSpawn` | false | `true` disables the no-spawn seccomp profile |
+
+<Warning>
+Setting `allowSpawn: true` removes the process-spawning restriction. Only enable this when the skill genuinely needs child processes and after careful review.
+</Warning>
+
+## Audit trail
+
+Sandbox events are logged in the audit trail:
+
+| Event | Description |
+|-------|-------------|
+| `sandbox_started` | Container launched with skill name, memory limit, network mode |
+| `sandbox_completed` | Container exited successfully with duration |
+| `sandbox_error` | Container failed: timeout, OOM, non-zero exit |
+
+Query sandbox events:
+
+```sql
+SELECT * FROM audit_events
+WHERE event LIKE 'sandbox_%'
+ORDER BY timestamp DESC
+LIMIT 10;
+```
+
+## Verification
+
+<Check>Security tests pass (`npm run test:security`)</Check>
+<Check>Container cannot reach external hosts with `--network none`</Check>
+<Check>Container is killed after timeout</Check>
+<Check>Container is killed when exceeding memory limit</Check>
+<Check>Read-only filesystem prevents writes outside `/tmp`</Check>
+
+## Next steps
+
+- [SkillManifest Schema](/reference/skillmanifest-schema) -- Manifest format and registration
+- [Trust Domains](/concepts/trust-domains) -- Domain C in the broader architecture
+- [Production Deployment](/guides/production-deployment) -- Security hardening for production

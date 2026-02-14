@@ -1,6 +1,26 @@
 {
   "name": "@clavion/types",
   "version": "0.1.0",
+  "description": "Shared TypeScript types, interfaces, and JSON schemas for Clavion/ISCL",
+  "author": "Dmitri N",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/clavion-xyz/clavion.git",
+    "directory": "packages/types"
+  },
+  "homepage": "https://github.com/clavion-xyz/clavion",
+  "bugs": "https://github.com/clavion-xyz/clavion/issues",
+  "keywords": [
+    "clavion",
+    "iscl",
+    "typescript",
+    "schemas",
+    "ethereum"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -18,7 +38,9 @@
       "types": "./dist/rpc-types.d.ts"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc -b",
     "clean": "rm -rf dist"

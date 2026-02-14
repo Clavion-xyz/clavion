@@ -4,9 +4,9 @@ import type { ApprovalTokenManager } from "./approval-token-manager.js";
 import type { AuditTraceService } from "@clavion/audit";
 import type { ApprovalSummary, ApprovalResult } from "@clavion/types";
 
-export type PromptFn = () => Promise<boolean>;
+export type PromptFn = (summary: ApprovalSummary) => Promise<boolean>;
 
-async function defaultPrompt(): Promise<boolean> {
+async function defaultPrompt(_summary: ApprovalSummary): Promise<boolean> {
   const rl = readline.createInterface({ input: stdin, output: stdout });
   try {
     const answer = await rl.question("\nApprove this transaction? (yes/no): ");
@@ -31,7 +31,7 @@ export class ApprovalService {
   async requestApproval(summary: ApprovalSummary): Promise<ApprovalResult> {
     this.renderSummary(summary);
 
-    const confirmed = await this.promptFn();
+    const confirmed = await this.promptFn(summary);
 
     if (!confirmed) {
       this.auditTrace.log("approval_rejected", {

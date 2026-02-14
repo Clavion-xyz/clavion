@@ -4,12 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { EncryptedKeystore } from "@clavion/signer";
 import { privateKeyToAddress } from "viem/accounts";
+import { TEST_PRIVATE_KEY, FAST_SCRYPT } from "../../../tools/fixtures/index.js";
 
-// Use fast scrypt for tests (N=1024 instead of 262144)
-const FAST_SCRYPT = { scryptN: 1024 };
-
-// Well-known test key — NEVER use on mainnet
-const TEST_PRIVATE_KEY = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80" as `0x${string}`;
 const TEST_ADDRESS = privateKeyToAddress(TEST_PRIVATE_KEY).toLowerCase();
 
 describe("EncryptedKeystore", () => {

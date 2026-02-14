@@ -64,4 +64,27 @@ describe("AuditTraceService", () => {
     const trail = audit.getTrail("nonexistent-id");
     expect(trail).toHaveLength(0);
   });
+
+  test("getRecentEvents() returns events in descending timestamp order", () => {
+    const id1 = randomUUID();
+    const id2 = randomUUID();
+    audit.log("event_a", { intentId: id1 });
+    audit.log("event_b", { intentId: id2 });
+    audit.log("event_c", { intentId: id1 });
+
+    const events = audit.getRecentEvents(10);
+    expect(events).toHaveLength(3);
+    expect(events[0]!.event).toBe("event_c");
+    for (let i = 1; i < events.length; i++) {
+      expect(events[i]!.timestamp).toBeLessThanOrEqual(events[i - 1]!.timestamp);
+    }
+  });
+
+  test("getRecentEvents() respects limit", () => {
+    for (let i = 0; i < 10; i++) {
+      audit.log(`event_${i}`, { intentId: randomUUID() });
+    }
+    const events = audit.getRecentEvents(3);
+    expect(events).toHaveLength(3);
+  });
 });

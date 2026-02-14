@@ -34,6 +34,8 @@ const result = await client.txApproveRequest(intent);
 
 The skill never sees the private key, never signs, and never talks to the blockchain directly.
 
+> To build your own Domain A adapter, see the [Adapter Development Tutorial](../development/adapter-tutorial.md).
+
 ---
 
 ## Domain B -- Trusted (ISCL Core)

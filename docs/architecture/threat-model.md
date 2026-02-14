@@ -5,6 +5,8 @@
 
 This document captures the threat model for the "Independent Secure Crypto Layer compatible with OpenClaw" (ISCL) and links every threat to specific mitigations, components, and tests. The goal of v0.1 is not "absolute security," but provable invariants: keys are isolated, signatures are controlled by policies, and malicious skills cannot silently exfiltrate data or send arbitrary transactions.
 
+> See also: [Risk Scoring Algorithm](../security/risk-scoring.md) for the 7-factor scoring system used in preflight simulation.
+
 ## 0. Trust Boundaries and Invariants v0.1
 
 We divide the system into three trust domains.

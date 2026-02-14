@@ -1,5 +1,7 @@
 import type { TransactionSerializableEIP1559 } from "viem";
 
+export { extractTokenAddresses, extractContractAddress } from "./intent-utils.js";
+
 // ---- Chain & Wallet ----
 
 export interface ChainObject {
@@ -41,6 +43,7 @@ export interface ApproveAction {
 export interface SwapExactInAction {
   type: "swap_exact_in";
   router: string;
+  provider?: "uniswap_v3" | "1inch";
   assetIn: Asset;
   assetOut: Asset;
   amountIn: string;
@@ -50,6 +53,7 @@ export interface SwapExactInAction {
 export interface SwapExactOutAction {
   type: "swap_exact_out";
   router: string;
+  provider?: "uniswap_v3" | "1inch";
   assetIn: Asset;
   assetOut: Asset;
   amountOut: string;
@@ -85,7 +89,6 @@ export interface Preferences {
 export interface Metadata {
   source?: string;
   note?: string;
-  [key: string]: unknown;
 }
 
 // ---- TxIntent ----
@@ -133,7 +136,7 @@ export interface ApprovalToken {
 
 /** Interface for validating/consuming approval tokens. Decouples @clavion/signer from @clavion/core. */
 export interface ApprovalTokenVerifier {
-  validate(tokenId: string, intentId: string, txRequestHash: string): boolean;
+  validate(tokenId: string, intentId: string, txRequestHash: string): { valid: boolean; reason?: string };
   consume(tokenId: string): void;
 }
 

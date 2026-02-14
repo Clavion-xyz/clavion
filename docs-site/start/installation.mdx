@@ -1,0 +1,128 @@
+---
+title: Installation
+description: System requirements and step-by-step installation for Clavion / ISCL.
+---
+
+## What you will learn
+
+- System prerequisites for running Clavion
+- How to install from source using Git and npm
+- How to install using Docker
+- How to verify your installation
+
+## Prerequisites
+
+| Requirement | Minimum | Purpose |
+|-------------|---------|---------|
+| Node.js | 20+ | Runtime for ISCL Core and adapters |
+| npm | 9+ | Dependency management (workspaces) |
+| Git | 2.x | Clone the repository |
+| Docker | 24+ | Optional -- sandbox execution, Docker Compose stack |
+| Foundry / Anvil | Latest | Optional -- local EVM fork for E2E testing |
+
+## Install from source
+
+<Steps>
+  <Step title="Clone the repository">
+    ```bash
+    git clone https://github.com/clavion/clavion.git
+    cd clavion
+    ```
+  </Step>
+  <Step title="Install dependencies">
+    ```bash
+    npm install
+    ```
+    This installs all workspace packages. `better-sqlite3` compiles a native addon -- if you see build errors, ensure you have a C++ toolchain installed (`xcode-select --install` on macOS, `build-essential` on Ubuntu).
+  </Step>
+  <Step title="Build TypeScript">
+    ```bash
+    npm run build
+    ```
+    Uses TypeScript project references (`tsc -b`) to build all packages in dependency order.
+  </Step>
+  <Step title="Run tests">
+    ```bash
+    npm test
+    ```
+    Runs the full test suite (639+ tests). All tests should pass.
+  </Step>
+</Steps>
+
+## Install with Docker
+
+For a containerized setup without local Node.js:
+
+```bash
+# Build the Docker image
+docker build -f docker/Dockerfile.core -t clavion-core .
+
+# Start with Docker Compose (ISCL Core + Anvil)
+docker compose -f docker/compose.yaml up -d
+```
+
+See [Docker Compose Stack](/start/quickstart#docker-compose-full-stack) for the full multi-service setup.
+
+## Verify installation
+
+<Tabs>
+  <Tab title="From Source">
+    Start the development server:
+    ```bash
+    npm run dev
+    ```
+    Check health:
+    ```bash
+    curl http://localhost:3100/v1/health
+    ```
+    Expected response:
+    ```json
+    {
+      "status": "ok",
+      "version": "0.1.0",
+      "uptime": 1.234
+    }
+    ```
+  </Tab>
+  <Tab title="Docker">
+    ```bash
+    docker compose -f docker/compose.yaml ps
+    ```
+    All services should show `Up`. Then:
+    ```bash
+    curl http://localhost:3100/v1/health
+    ```
+  </Tab>
+</Tabs>
+
+## Directory structure
+
+After installation, the repository has this layout:
+
+```text
+clavion/
+├── packages/           # All workspace packages
+│   ├── types/          # Shared interfaces and schemas
+│   ├── core/           # API server, tx builders, approval
+│   ├── signer/         # Encrypted keystore and signing
+│   ├── audit/          # Append-only audit trail (SQLite)
+│   ├── policy/         # Policy engine and config
+│   ├── preflight/      # Risk scoring and simulation
+│   ├── registry/       # Skill manifest validation
+│   ├── sandbox/        # Container isolation runner
+│   ├── adapter-openclaw/ # OpenClaw integration
+│   ├── adapter-mcp/    # MCP server for Claude/Cursor
+│   ├── plugin-eliza/   # ElizaOS plugin
+│   ├── adapter-telegram/ # Telegram bot
+│   └── cli/            # Key management CLI
+├── tests/              # Cross-package integration and security tests
+├── tools/              # Fixture generation utilities
+├── docker/             # Dockerfile and Compose config
+└── docs/               # Internal documentation
+```
+
+## Next steps
+
+- [Quick Start](/start/quickstart) -- Run your first transaction
+- [CLI Reference](/start/cli) -- Import or generate a wallet key
+- [Configuration](/reference/config-reference) -- Environment variables and policy config

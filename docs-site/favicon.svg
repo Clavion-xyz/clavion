@@ -1,0 +1,10 @@
+<svg width="32" height="32" viewBox="0 0 72 72" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Outer brackets -->
+  <path d="M16 10C10 10 6 16 6 22V50C6 56 10 62 16 62" stroke="#00ff9d" stroke-width="6" stroke-linecap="round" opacity="0.25"/>
+  <path d="M56 10C62 10 66 16 66 22V50C66 56 62 62 56 62" stroke="#00ff9d" stroke-width="6" stroke-linecap="round" opacity="0.25"/>
+  <!-- Mid brackets -->
+  <path d="M27 18C22 18 18 22 18 27V45C18 50 22 54 27 54" stroke="#00ff9d" stroke-width="6" stroke-linecap="round" opacity="0.55"/>
+  <path d="M45 18C50 18 54 22 54 27V45C54 50 50 54 45 54" stroke="#00ff9d" stroke-width="6" stroke-linecap="round" opacity="0.55"/>
+  <!-- Core -->
+  <circle cx="36" cy="36" r="6" fill="#00ff9d"/>
+</svg>

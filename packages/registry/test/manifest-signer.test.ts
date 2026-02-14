@@ -11,10 +11,8 @@ import { writeFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SkillManifest } from "@clavion/types";
+import { TEST_PRIVATE_KEY } from "../../../tools/fixtures/index.js";
 
-// Deterministic test key — NEVER use in production
-const TEST_PRIVATE_KEY =
-  "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80" as const;
 const TEST_ADDRESS = privateKeyToAddress(TEST_PRIVATE_KEY);
 
 function baseManifest(): Omit<SkillManifest, "signature"> {

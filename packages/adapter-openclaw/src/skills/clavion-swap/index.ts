@@ -12,6 +12,7 @@ export async function handleSwap(
     const action: SwapExactInAction = {
       type: "swap_exact_in",
       router: params.router,
+      provider: params.provider,
       assetIn: params.assetIn,
       assetOut: params.assetOut,
       amountIn: params.amountIn,

@@ -65,4 +65,7 @@ ENV ISCL_PORT=3100
 ENV ISCL_AUDIT_DB=/home/iscl/.iscl/data/audit.sqlite
 ENV ISCL_KEYSTORE_PATH=/home/iscl/.iscl/keystore
 
+HEALTHCHECK --interval=10s --timeout=3s --start-period=15s --retries=3 \
+  CMD wget -q --spider http://localhost:3100/v1/health || exit 1
+
 CMD ["node", "packages/core/dist/main.js"]

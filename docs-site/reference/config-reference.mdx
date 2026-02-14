@@ -1,0 +1,152 @@
+---
+title: Configuration Reference
+description: All environment variables, PolicyConfig fields, and programmatic options.
+---
+
+## What you will learn
+
+- Every environment variable recognized by ISCL Core and adapters
+- PolicyConfig fields and their effects
+- AppOptions for programmatic configuration
+
+## ISCL Core environment variables
+
+### Server
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `ISCL_PORT` | number | `3100` | HTTP server listen port |
+| `ISCL_HOST` | string | `127.0.0.1` | Bind address. Use `0.0.0.0` in Docker |
+| `ISCL_AUDIT_DB` | string | `./iscl-audit.sqlite` | SQLite database path |
+| `ISCL_KEYSTORE_PATH` | string | `~/.iscl/keystore` | Encrypted keystore directory |
+| `ISCL_APPROVAL_MODE` | string | `cli` | Approval mode: `cli`, `web`, or `auto` |
+
+### Multi-Chain RPC
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `ISCL_RPC_URL_{chainId}` | string | -- | Per-chain RPC URL (e.g., `ISCL_RPC_URL_8453`) |
+| `BASE_RPC_URL` | string | -- | Legacy fallback for chain 8453 (Base) |
+
+Supported chains: Ethereum (1), Optimism (10), Arbitrum (42161), Base (8453).
+
+**Resolution logic:**
+1. Scan env vars matching `ISCL_RPC_URL_{digits}` -- add each to the URL map
+2. If `BASE_RPC_URL` set and `ISCL_RPC_URL_8453` not set, add as chain 8453
+3. Single URL → `ViemRpcClient` (backward compatible)
+4. Multiple URLs → `RpcRouter` (dispatches per chain)
+
+### DEX Aggregation
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `ONEINCH_API_KEY` | string | -- | 1inch Swap API v6 key. Enables `provider: "1inch"` on swap intents |
+
+### Demo / development
+
+| Variable | Type | Default | Description |
+|----------|------|---------|-------------|
+| `ISCL_DEMO_PASSPHRASE` | string | `test-passphrase-123` | Passphrase for demo keystore |
+| `ISCL_AUTO_APPROVE` | string | `false` | Auto-approve all (demo only) |
+
+## Adapter environment variables
+
+### Telegram Bot
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `TELEGRAM_BOT_TOKEN` | Yes | -- | Bot token from BotFather |
+| `ISCL_WALLET_ADDRESS` | Yes | -- | Wallet address (0x + 40 hex) |
+| `ISCL_CHAIN_ID` | No | `8453` | Default chain ID |
+| `ISCL_TELEGRAM_ALLOWED_CHATS` | No | (allow all) | Comma-separated chat IDs |
+| `ISCL_API_URL` | No | `http://127.0.0.1:3100` | ISCL Core URL |
+| `ISCL_TIMEOUT_MS` | No | `30000` | HTTP timeout (ms) |
+
+### MCP Adapter
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `ISCL_API_URL` | No | `http://127.0.0.1:3100` | ISCL Core URL |
+
+### Eliza Plugin
+
+Configured via ElizaOS character file `settings.secrets`:
+
+| Key | Required | Description |
+|-----|----------|-------------|
+| `ISCL_API_URL` | Yes | ISCL Core URL |
+| `ISCL_WALLET_ADDRESS` | Yes | Wallet address |
+
+---
+
+## PolicyConfig
+
+Controls which transactions are allowed, denied, or require approval. Provided as JSON file or programmatically.
+
+### Fields
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `version` | `"1"` | `"1"` | Schema version |
+| `maxValueWei` | string | `"0"` | Max transaction value. `"0"` = deny all |
+| `maxApprovalAmount` | string | `"0"` | Max ERC-20 approval. `"0"` = deny all |
+| `contractAllowlist` | string[] | `[]` | Allowed contracts. Empty = allow all |
+| `tokenAllowlist` | string[] | `[]` | Allowed tokens. Empty = allow all |
+| `allowedChains` | number[] | `[1,10,42161,8453]` | Allowed chain IDs |
+| `recipientAllowlist` | string[] | `[]` | Allowed recipients. Empty = allow all |
+| `maxRiskScore` | integer | `50` | Risk score ceiling (0-100) |
+| `requireApprovalAbove` | object | `{"valueWei":"0"}` | Approval value threshold |
+| `maxTxPerHour` | integer | `10` | Per-wallet rate limit |
+
+<Warning>
+The default policy denies ALL value-bearing transactions (`maxValueWei: "0"`). You must configure limits explicitly.
+</Warning>
+
+### Example: Production Policy
+
+```json
+{
+  "version": "1",
+  "maxValueWei": "1000000000000000000",
+  "maxApprovalAmount": "1000000000000000000",
+  "contractAllowlist": ["0x2626664c2603336E57B271c5C0b26F421741e481"],
+  "tokenAllowlist": [
+    "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    "0x4200000000000000000000000000000000000006"
+  ],
+  "allowedChains": [8453],
+  "recipientAllowlist": [],
+  "maxRiskScore": 30,
+  "requireApprovalAbove": { "valueWei": "500000000000000000" },
+  "maxTxPerHour": 5
+}
+```
+
+---
+
+## AppOptions (programmatic)
+
+When using `buildApp()` directly:
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `logger` | boolean | `true` | Enable pino logging |
+| `auditDbPath` | string | `./iscl-audit.sqlite` | Audit DB path |
+| `keystorePath` | string | `~/.iscl/keystore` | Keystore directory |
+| `policyConfig` | PolicyConfig | deny-all | Inline policy config |
+| `rpcClient` | RpcClient | -- | Pre-configured RPC client |
+| `promptFn` | PromptFn | -- | Custom approval function |
+| `approvalMode` | string | `cli` | Approval mode |
+| `oneInchApiKey` | string | -- | 1inch API key |
+
+**PromptFn signature:**
+
+```typescript
+type PromptFn = (summary: ApprovalSummary) => Promise<boolean>;
+```
+
+## Next steps
+
+- [Policy Engine](/concepts/policy-engine) -- How policy rules are evaluated
+- [Error Codes](/reference/error-codes) -- Policy denial error shapes
+- [Production Deployment](/guides/production-deployment) -- Production configuration

@@ -1,0 +1,359 @@
+---
+title: Trust Domains
+description: The three-domain isolation model that keeps private keys safe from untrusted agent code.
+---
+
+## What you will learn
+
+- Why trust domain isolation is necessary for AI agent crypto operations
+- What each domain can and cannot do
+- How boundaries are enforced at package, network, process, and test levels
+- The full threat model: 14 threat scenarios across all domains with mitigations and test references
+- The security invariants that every deployment must satisfy
+
+## The core problem
+
+AI agents run potentially untrusted code: community-authored skills, LLM-generated actions, third-party plugins. If this code has access to private keys, a single compromise drains the wallet.
+
+Clavion solves this by dividing the system into three trust domains with strict, enforced boundaries. Every line of code belongs to exactly one domain. No component straddles a boundary.
+
+## Domain A -- Untrusted
+
+**Packages:** `adapter-openclaw`, `adapter-mcp`, `plugin-eliza`, `adapter-telegram`
+
+Domain A contains all agent-facing code. Code in this domain is considered potentially compromisable at all times.
+
+**What Domain A can do:**
+- Construct declarative TxIntents (JSON describing desired operations)
+- Communicate with Domain B via localhost HTTP API
+- Read balance and transaction status data through Domain B
+
+**What Domain A cannot do:**
+- Access private keys or any key material
+- Sign transactions directly
+- Contact blockchain RPC endpoints
+- Control approval summaries shown to users
+- Access policy configuration or audit data
+
+<Note>
+The key insight: Domain A code expresses *intent*, never *execution*. A skill says "I want to transfer 100 USDC to 0xAlice" -- it never constructs raw calldata, never sets gas parameters, never touches a signing function.
+</Note>
+
+## Domain B -- Trusted
+
+**Packages:** `core`, `signer`, `audit`, `policy`, `preflight`, `registry`, `types`
+
+Domain B is the only domain that holds key material and can sign transactions. Every operation follows a mandatory pipeline:
+
+```text
+TxIntent -> PolicyEngine.evaluate() -> TxBuilder.build() -> PreflightService.simulate()
+-> ApprovalService.requestApproval() -> WalletService.sign() -> Broadcast -> AuditTrace
+```
+
+No step can be bypassed. There is no `signRaw` API, no backdoor for "trusted" skills, no way to skip policy evaluation.
+
+**Security guarantees:**
+- Keys encrypted at rest (scrypt + AES-256-GCM), decrypted only in memory for signing
+- Policy engine evaluates every intent against configurable rules
+- Preflight simulation detects anomalies before signing
+- Approval tokens are single-use with 300s TTL
+- Every step is written to an append-only audit trail
+
+## Domain C -- Limited Trust
+
+**Packages:** `sandbox`
+
+Domain C runs untrusted skill code in Docker containers with aggressive restrictions:
+
+| Restriction | Flag | Effect |
+|-------------|------|--------|
+| No network | `--network none` | Cannot reach internet or other containers |
+| Read-only filesystem | `--read-only` | Cannot write to disk (except `/tmp`) |
+| No capabilities | `--cap-drop ALL` | All Linux capabilities removed |
+| No privilege escalation | `--security-opt no-new-privileges` | Cannot gain new privileges |
+| No process spawning | seccomp profile | Blocks `clone`, `fork`, `exec` syscalls |
+| Resource limits | `--memory`, `--cpus` | Memory (128MB) and CPU (0.5 cores) caps |
+
+Domain C communicates with Domain B exclusively via HTTP API. Key material is never present in the container.
+
+## Boundary enforcement
+
+The three-domain boundary is enforced at multiple levels simultaneously:
+
+| Level | Mechanism |
+|-------|-----------|
+| **Package** | Domain B packages are never imported by Domain A code. TypeScript project references enforce this at build time |
+| **Network** | Keys never traverse HTTP. Only approval tokens and signed transaction hashes cross the API boundary |
+| **Process** | Sandbox containers have no access to the host filesystem where keys are stored |
+| **Runtime** | Strict JSON Schema validation (`additionalProperties: false`) on all API inputs |
+| **Test** | Security test suite (`tests/security/`) verifies domain boundaries: key exfiltration attempts, import graph integrity, cross-domain access |
+
+## What compromise looks like
+
+| Scenario | Impact |
+|----------|--------|
+| Malicious skill in Domain A | Can submit TxIntents, but each must pass policy, simulation, and approval. Cannot access keys. |
+| Compromised sandbox in Domain C | No network access, no keys, no filesystem. Cannot exfiltrate data or sign transactions. |
+| Compromised RPC endpoint | Can return false simulation results, but policy engine and approval flow still protect against unauthorized signing. |
+| Prompt injection in agent | Agent can only call the ISCL API. Cannot bypass policy or approval. Worst case: submits many TxIntents (rate limited). |
+
+---
+
+## Security blueprint: threat model
+
+The following threat model captures every identified threat to the system and maps each one to specific mitigations, responsible components, and test references. The goal of v0.1 is not "absolute security" but **provable invariants**: keys are isolated, signatures are controlled by policies, and malicious skills cannot silently exfiltrate data or send arbitrary transactions.
+
+### Trust boundaries and invariants (v0.1)
+
+Every deployment must satisfy these five invariants. If any invariant is violated, the system is considered compromised.
+
+1. The private key is **never** available in Domain A or C. It exists only in Domain B.
+2. Any transaction signature passes through the PolicyEngine and Preflight; if confirmation mode is enabled, it requires human approval.
+3. OpenClaw skills do not have direct RPC access to the blockchain; only ISCL Core can access RPC via an allowlist.
+4. Any operation that can lead to a loss of funds is expressed as a TxIntent v1 and validated against a schema; arbitrary calldata is not signed in v0.1.
+5. All critical steps are written to the AuditTrace with correlation: `intentId` &rarr; preflight &rarr; approval &rarr; signature &rarr; `txHash` &rarr; receipt.
+
+### Domain A threats (OpenClaw / skills)
+
+These threats target the untrusted agent layer -- the code most likely to be compromised via prompt injection, supply chain attacks, or malicious skill packages.
+
+<AccordionGroup>
+
+<Accordion title="T1: Malicious skill attempts to steal the private key">
+
+**Attack vector:** A skill attempts to read environment variables, standard key paths (`~/.ssh`, `~/.config`), process memory, or calls guessed API endpoints to extract key material.
+
+**Mitigation:** Keys are physically not present in Domain A. OpenClaw skills do not receive secrets. All signing occurs in the `WalletService` of Domain B. There is no API endpoint in Domain A to extract the key -- only a request to "sign txRequest" which requires passing policy checks and approval.
+
+**Components:** `WalletService`, OpenClaw Adapter (thin clients), Config Manager.
+
+**Test:** `SecurityTest_A1 "SkillKeyExfiltration"` -- Launches a test "evil-skill" in the OpenClaw environment that attempts to read standard paths and environment variables and calls guessed APIs. Expectation: keys are missing, access error, attempts are recorded in the audit trace. Separately verifies that signing is impossible without policy + approval.
+
+</Accordion>
+
+<Accordion title="T2: Malicious skill makes arbitrary network requests (exfiltration, C2 communication)">
+
+**Attack vector:** A skill attempts to contact an external server to exfiltrate data (wallet addresses, intent details), download a malicious payload, or establish command-and-control communication.
+
+**Mitigation:** Domain A has no network permissions for crypto operations; crypto-skills only communicate with the localhost ISCL API. In Domain C, the network is allowlist-only. In Domain B, there is an egress allowlist for RPC and simulation endpoints. All other domains are blocked.
+
+**Components:** Sandbox Runner (for Domain C), OpenClaw skill packaging policy (for Domain A), NetworkPolicy.
+
+**Test:** `SecurityTest_A2 "NoExternalNetworkFromSkill"` -- Skill attempts to make a request to an arbitrary domain. Expectation: blocked, logged, execution denied.
+
+</Accordion>
+
+<Accordion title="T3: Skill attempts to deceive the user via UI (semantic spoofing)">
+
+**Attack vector:** A skill sends a TxIntent for one operation (e.g., "swap 1 USDC") but attempts to spoof the approval summary shown to the user, making a large transfer appear small or benign.
+
+**Mitigation:** Human approval is not shown from the skill's data but is formed by ISCL Core based on the `BuildPlan` and `Preflight` results. The skill does not control the confirmation text. The `ApprovalRequest` is formed from canonical data: `to`, `contract`, method signature, token amounts, slippage, and expected balance diffs.
+
+**Components:** `TxEngine`, `PreflightService`, `ApprovalComposer`.
+
+**Test:** `SecurityTest_A3 "ApprovalSummarySourceOfTruth"` -- Skill sends a TxIntent "swap 1 USDC" but attempts to spoof the summary. Expectation: in the `ApprovalRequest`, the text and details correspond to build/preflight output, not the skill input; spoofing has no effect.
+
+</Accordion>
+
+<Accordion title="T4: Skill generates TxIntent with harmful parameters">
+
+**Attack vector:** A skill constructs a TxIntent with harmful parameters: a huge `approve` amount (MaxUint256), a spoofed recipient address, or a swap targeting an unknown/malicious contract.
+
+**Mitigation:** Strict TxIntent schema validation + PolicyEngine. Policy blocks unknown contracts, amounts exceeding `maxApprovalAmount`, values exceeding `maxValueWei`, and mismatches against `tokenAllowlist` / `contractAllowlist`. Preflight adds warnings and elevates risk for anomalies.
+
+**Components:** TxIntent validator, `PolicyEngine`, `PreflightService`.
+
+**Test:** `SecurityTest_A4 "PolicyDeniesBadIntents"` -- A set of cases: approve for MaxUint without permission, transfer to a disallowed address, swap via an unknown router. Expectation: deny with reason code; `policy_denied` event recorded in audit trace.
+
+</Accordion>
+
+</AccordionGroup>
+
+### Domain C threats (Secure Executor / Sandbox)
+
+These threats target the container-isolated execution environment where untrusted skill code runs.
+
+<AccordionGroup>
+
+<Accordion title="T5: Malicious crypto-skill in Domain C attempts to access keys">
+
+**Attack vector:** A skill running inside the sandbox attempts to read key material from the filesystem, environment variables, or shared memory.
+
+**Mitigation:** Keys are absent in Domain C. The only pathway to signing is to request a signature via the ISCL API, but this request passes through policy and may require human approval. Any attempts to read key material are impossible -- the container has no access to the host filesystem.
+
+**Components:** `WalletService` (B), Sandbox FS isolation (C), IPC boundary.
+
+**Test:** `SecurityTest_C1 "ExecutorCannotReadKeys"` -- Runs a malicious package in the sandbox that attempts to find keys on the filesystem and in environment variables. Expectation: absent; attempts recorded; signing impossible without approval.
+
+</Accordion>
+
+<Accordion title="T6: Skill in Domain C attempts to access the internet">
+
+**Attack vector:** A skill attempts to download a malicious payload, exfiltrate data to an external server, or establish a reverse shell.
+
+**Mitigation:** Network is allowlist-only (`--network none` by default). Only specific RPC endpoints are allowed if necessary, but generally network access is blocked entirely for skills, as RPC access belongs to ISCL Core. Any external domains are blocked.
+
+**Components:** Sandbox Runner network policy.
+
+**Test:** `SecurityTest_C2 "NetworkAllowlist"` -- Attempts requests to domains outside the allowlist. Expectation: blocked, written to audit trace.
+
+</Accordion>
+
+<Accordion title="T7: Skill attempts to execute arbitrary processes / mining / DoS">
+
+**Attack vector:** A skill attempts to spawn child processes (bash, curl, node), run a crypto miner, or perform a CPU/memory denial-of-service attack.
+
+**Mitigation:** `no_spawn` or whitelisted-spawn policy via seccomp profiles. cgroups resource limits enforce memory (128MB) and CPU (0.5 cores) caps. Execution timeouts kill long-running processes. Crypto miners and any binaries outside the allowlist are prohibited.
+
+**Components:** Sandbox Runner process policy, resource limits.
+
+**Test:** `SecurityTest_C3 "NoSpawnNoMine"` -- Attempts to spawn "bash", "curl", "node -e download" with no_spawn enabled. Expectation: denial. Attempts CPU burn. Expectation: stopped by limits and recorded in trace.
+
+</Accordion>
+
+<Accordion title="T8: Supply chain attack -- substitution of skill package or dependency">
+
+**Attack vector:** An attacker modifies a skill package after publication (npm typosquatting, CDN compromise, or Git repo takeover), inserting malicious code.
+
+**Mitigation:** Signed Skill Package with `manifestHash` / `sourceHash` verification on installation. Lockfile is mandatory. If the signature is absent or the hash mismatches, installation is blocked or requires an explicit override from the operator.
+
+**Components:** `SkillRegistryService`, Installer, Scanner.
+
+**Test:** `SecurityTest_C4 "TamperedPackageRejected"` -- Changes one file in the package. Expectation: SHA-256 mismatch, installation forbidden. Changes manifest after signing. Expectation: signature invalid, registration rejected.
+
+</Accordion>
+
+</AccordionGroup>
+
+### Domain B threats (ISCL Core)
+
+These threats target the trusted core -- the most critical components that hold keys and sign transactions.
+
+<AccordionGroup>
+
+<Accordion title="T9: RPC endpoint compromised, returns false data">
+
+**Attack vector:** A compromised or malicious RPC endpoint returns spoofed simulation results, manipulated token prices, or false balance data to trick the preflight system into approving a harmful transaction.
+
+**Mitigation:** Allowlist of trusted RPCs. Optional mode (v0.1) to use two independent RPCs for comparison. Any simulation is tagged with `source=rpcX`. On discrepancies between sources, the system elevates risk and may demand additional confirmation.
+
+**Components:** `RpcClient`, `PreflightService`.
+
+**Test:** `SecurityTest_B1 "RpcMismatchElevatesRisk"` -- Mocks two RPCs where one returns a different result. Expectation: risk elevated, approval requires confirmation, trace records mismatch.
+
+</Accordion>
+
+<Accordion title="T10: Policy bypass via undocumented signing path">
+
+**Attack vector:** An attacker discovers or creates an internal code path that reaches `WalletService.sign()` without passing through the PolicyEngine or requiring an approval token.
+
+**Mitigation:** `WalletService` signs only via a single method requiring both a valid `PolicyDecision` and a single-use `ApprovalToken`. No `signRaw` API exists. Internal APIs are closed. All signatures are logged to the audit trail.
+
+**Components:** `WalletService`, `PolicyEngine`, `ApprovalTokenManager`.
+
+**Test:** `SecurityTest_B2 "NoBypassSigning"` -- Attempts to call the internal signing endpoint without an approval token. Expectation: 403/deny. Verifies that all signatures are accompanied by `policy_allowed` + `approval_used` trace events.
+
+</Accordion>
+
+<Accordion title="T11: Replay attack -- reuse of approvalToken or intentId">
+
+**Attack vector:** An attacker captures a valid approval token and replays it to sign a different transaction, or resubmits a consumed `intentId` to trigger duplicate execution.
+
+**Mitigation:** `approvalToken` is single-use, bound to a specific `intentId` and `txRequestHash`, and has a TTL (300 seconds). `intentId` is idempotent: repeated build returns the same plan, or reports "intent already consumed" after sending. Replayed tokens are rejected immediately.
+
+**Components:** `IdempotencyStore`, `ApprovalTokenManager`, `TxEngine`.
+
+**Test:** `SecurityTest_B3 "ApprovalTokenSingleUse"` -- Uses an approval token a second time. Expectation: refusal. Repeats sign-and-send with the same `intentId` after sending. Expectation: refusal or "already sent" returning the existing `txHash`.
+
+</Accordion>
+
+<Accordion title="T12: Excessively broad approvals (MaxUint allowances)">
+
+**Attack vector:** A skill submits an ERC-20 `approve` action with an unlimited amount (MaxUint256), granting a spender permanent access to the user's entire token balance.
+
+**Mitigation:** Policy `maxApprovalAmount` + preference for "exact approval" or "bounded approval". Preflight shows the allowance change and warns the user. By default, `maxApprovalAmount` is restricted to prevent unlimited approvals.
+
+**Components:** `TxEngine` (approve builder), `PolicyEngine`, `ApprovalComposer`.
+
+**Test:** `SecurityTest_B4 "ApprovalBounded"` -- Submits a TxIntent approve with amount exceeding the policy limit. Expectation: deny. Swap workflow requiring approve builds approve for the bounded amount only.
+
+</Accordion>
+
+</AccordionGroup>
+
+### User threats and social engineering
+
+These threats target the human operator rather than the software.
+
+<AccordionGroup>
+
+<Accordion title="T13: User approves a harmful transaction (social engineering)">
+
+**Attack vector:** An attacker uses social engineering (phishing, urgency, deception) to convince the user to approve a harmful transaction that passes all policy checks.
+
+**Mitigation:** Show a clear approval summary with risk score, balance diffs, and all relevant parameters (asset in/out, min/max amounts, spender/recipient, risk reasons). The approval prompt is generated from canonical data by ISCL Core, not from skill-provided text.
+
+**Components:** `ApprovalComposer`, UI/CLI approval.
+
+**Test:** `UXTest_1 "ApprovalClarity"` -- Checks for mandatory fields in the approval prompt: asset in/out, minOut/maxIn, spender/recipient, and risk reasons.
+
+<Warning>
+**Limitation (v0.1):** If the user explicitly approves a transaction, the system will execute it within policy limits. ISCL cannot prevent a fully informed user from making a bad decision. Policy configuration is the main barrier -- operators should set conservative limits to reduce the blast radius of social engineering attacks.
+</Warning>
+
+</Accordion>
+
+<Accordion title="T14: User OS compromise / rootkit">
+
+**Attack vector:** An attacker gains root access to the user's operating system, enabling them to read process memory, intercept keystrokes, or modify ISCL binaries.
+
+<Warning>
+**Limitation (v0.1):** OS-level compromise is out of scope for ISCL v0.1. If the attacker has root on the host, they can read key material from process memory regardless of the trust domain model. Future mitigations include hardware wallet integration and remote signer support (planned for v0.2).
+</Warning>
+
+</Accordion>
+
+</AccordionGroup>
+
+### Test matrix: "definition of secure enough" for pilot
+
+For the v0.1 pilot, the system is considered "secure enough" if all four criteria are met:
+
+| # | Criterion | Verification |
+|---|-----------|--------------|
+| 1 | All security tests pass | `SecurityTest_A1..A4`, `C1..C4`, `B1..B4` pass in CI |
+| 2 | Full audit chain for every signature | Every signature in logs has the linkage: `intentId` &rarr; `policyAllowed` &rarr; `preflight` &rarr; `approval` &rarr; `sign` &rarr; `send` |
+| 3 | No signing without human confirmation | With human approval enabled, it is impossible to send a transaction without manual confirmation |
+| 4 | Sandbox isolation verified | Access to the network outside the allowlist and filesystem outside `allowedPaths` is impossible within the sandbox |
+
+### Mandatory audit events
+
+The `AuditTrace` must capture these nine event types for every transaction lifecycle. These events are necessary for incident investigations and future reputation/attestation systems.
+
+| Event | Key Fields |
+|-------|------------|
+| `intent_received` | `intentId`, `skillId`, `openclawVersion`, `createdAt` |
+| `policy_evaluated` | `decision`, `reasons`, `policyVersion` |
+| `build_completed` | `txRequestHash`, `to`, `value`, `methodSig` |
+| `preflight_completed` | `riskScore`, `balanceDiffsSummary`, `warnings` |
+| `approval_issued` | `approvalTokenId`, `ttl` |
+| `signature_created` | `txRequestHash`, `signerId` |
+| `tx_sent` | `txHash`, `chainId` |
+| `tx_receipt` | `status`, `gasUsed` |
+| `security_violation` | `type`, `details` (for sandbox events) |
+
+### Security roadmap (post-pilot)
+
+v0.2 will add: session keys/allowances, smart accounts, multi-RPC consensus, stricter sandbox (WASM / Firecracker / Nanoclaw executor), package signing with attestation, and optional private relay integration.
+
+---
+
+## Architectural decision
+
+This architecture is formalized in [ADR-001: Trust Domain Isolation](https://github.com/clavion/clavion/blob/main/docs/architecture/adrs/001-trust-domain-isolation.md), which documents the problem analysis, alternatives considered, and trade-offs accepted.
+
+## Next steps
+
+- [Transaction Lifecycle](/concepts/transaction-lifecycle) -- How intents flow through the pipeline
+- [Policy Engine](/concepts/policy-engine) -- How policy rules enforce security
+- [Sandbox Security](/guides/sandbox-security) -- Hands-on guide to Domain C isolation

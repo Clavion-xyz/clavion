@@ -1,0 +1,302 @@
+---
+title: Performance Tuning
+description: Optimize SQLite, RPC, throughput, and resource usage
+icon: gauge-high
+---
+
+## Performance profile
+
+ISCL is designed for **moderate throughput, low-latency local operations**. The typical transaction pipeline takes 1-5 seconds, dominated by RPC calls to the blockchain:
+
+| Stage | Typical Latency | Bottleneck |
+|-------|----------------|------------|
+| Policy evaluation | &lt;1ms | CPU (in-memory rules) |
+| Transaction build | &lt;1ms | CPU (ABI encoding) |
+| Preflight simulation (eth\_call) | 50-500ms | **RPC network round-trip** |
+| Gas estimation | 50-200ms | **RPC network round-trip** |
+| Approval (auto mode) | &lt;1ms | -- |
+| Approval (human) | 1s-300s | **Human interaction** |
+| Signing | &lt;5ms | CPU (ECDSA, keystore decrypt) |
+| Broadcast | 50-200ms | **RPC network round-trip** |
+| Audit logging | &lt;1ms | Disk I/O (SQLite WAL) |
+
+<Note>
+RPC calls account for 90%+ of pipeline latency. Optimizing SQLite or in-process code yields marginal gains. Optimizing RPC configuration has the largest impact.
+</Note>
+
+## SQLite tuning
+
+### WAL mode (default)
+
+ISCL enables WAL (Write-Ahead Logging) by default:
+
+```typescript
+this.db.pragma("journal_mode = WAL");
+```
+
+WAL provides the best performance for ISCL's access pattern (many small writes, concurrent reads for the web dashboard). No change is needed.
+
+### Synchronous mode
+
+By default, SQLite uses `PRAGMA synchronous = FULL` in WAL mode. For slightly faster writes at the cost of durability during power loss:
+
+```sql
+PRAGMA synchronous = NORMAL;
+```
+
+<Warning>
+In `NORMAL` mode, a power failure (not a process crash) could lose the most recent transactions. Process crashes are still safe. For most ISCL deployments (single-user, local runtime), `NORMAL` is acceptable.
+</Warning>
+
+To apply this, modify the constructor in `audit-trace-service.ts`:
+
+```typescript
+this.db.pragma("synchronous = NORMAL");
+```
+
+### Database size management
+
+The audit trail grows indefinitely. For long-running deployments:
+
+**Monitor size:**
+
+```bash
+ls -lh ~/.iscl/audit.sqlite*
+```
+
+**Estimate growth:** Each audit event is ~200-500 bytes. A deployment processing 100 transactions/day generates ~70KB/day of audit data (including rate limit entries), or ~25MB/year.
+
+**Rate limit cleanup:** ISCL automatically cleans up expired rate limit entries. The `cleanupRateLimitEvents()` method removes entries older than the rate limit window (1 hour by default). This runs periodically and prevents the `rate_limit_events` table from growing unboundedly.
+
+**Vacuuming:** SQLite does not automatically reclaim disk space from deleted rows. After deleting old rate limit events:
+
+```sql
+VACUUM;
+```
+
+<Warning>
+VACUUM rewrites the entire database and temporarily doubles disk usage. Run during maintenance windows.
+</Warning>
+
+### Memory-mapped I/O
+
+For read-heavy workloads (frequent dashboard polling), enable memory-mapped I/O:
+
+```sql
+PRAGMA mmap_size = 268435456;  -- 256MB
+```
+
+This maps the database file into virtual memory, eliminating read syscalls for cached pages. Effective when the audit database fits in RAM.
+
+## RPC optimization
+
+### Provider selection
+
+RPC latency varies significantly by provider. Measure before choosing:
+
+```bash
+# Benchmark RPC latency
+time curl -s -X POST https://your-rpc-url \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}'
+```
+
+**Guidelines:**
+- Local nodes (Geth, Reth) provide the lowest latency (&lt;10ms) but require infrastructure
+- Paid providers (Alchemy, Infura, QuickNode) typically offer 20-100ms latency
+- Free public endpoints are rate-limited and may add 100-500ms latency
+
+### Multi-chain RPC configuration
+
+Configure per-chain RPC URLs for optimal routing:
+
+```bash
+ISCL_RPC_URL_1=https://eth-mainnet.alchemy.com/v2/KEY     # Ethereum
+ISCL_RPC_URL_10=https://opt-mainnet.alchemy.com/v2/KEY     # Optimism
+ISCL_RPC_URL_42161=https://arb-mainnet.alchemy.com/v2/KEY  # Arbitrum
+ISCL_RPC_URL_8453=https://base-mainnet.alchemy.com/v2/KEY  # Base
+```
+
+<Tip>
+Each chain gets its own RPC client via the `RpcRouter`. Avoid using a single multi-chain gateway URL -- direct per-chain connections are faster and avoid cross-chain routing overhead.
+</Tip>
+
+### Connection reuse
+
+ISCL uses Node.js `fetch` for RPC calls, which benefits from HTTP keep-alive by default. To verify:
+
+```bash
+# Check active connections
+ss -tnp | grep node
+```
+
+If you see many connections in TIME\_WAIT, the RPC provider may be closing connections aggressively. Consider providers that support persistent connections.
+
+### Rate limiting with providers
+
+RPC providers enforce rate limits (typically 10-100 requests/second for free tiers). ISCL's pipeline makes 2-4 RPC calls per transaction:
+
+1. `eth_call` (simulation)
+2. `eth_estimateGas`
+3. `eth_getTransactionCount` (nonce)
+4. `eth_sendRawTransaction` (broadcast)
+
+At 10 transactions/hour (default rate limit), this is ~40 RPC calls/hour -- well within free tier limits. If you increase the transaction rate, ensure your RPC plan supports the throughput.
+
+## Transaction throughput
+
+### Rate limit configuration
+
+The default rate limit is 10 transactions per wallet per hour. To adjust:
+
+```json
+{
+  "maxTxPerHour": 50
+}
+```
+
+**Considerations:**
+- Higher limits increase gas costs and RPC usage
+- Rate limiting is enforced in SQLite, so lookup is O(1) via indexed queries
+- The cleanup interval for expired rate limit entries is automatic
+
+### Concurrent transactions
+
+ISCL processes transactions sequentially per wallet (to manage nonces correctly). Multiple wallets can operate in parallel since each has its own nonce sequence.
+
+For higher throughput:
+- Use multiple wallet addresses (distribute load)
+- Ensure policy allows the needed transaction rate per wallet
+
+### Approval bottleneck
+
+In `web` or `cli` approval mode, human confirmation is the primary throughput bottleneck. Each transaction blocks until the user approves or the TTL expires (300 seconds).
+
+<Tip>
+**Mitigation strategies:**
+- Configure `requireApprovalAbove.valueWei` to auto-approve small transactions
+- Set `maxRiskScore` high enough that low-risk operations pass without approval
+- Use `auto` mode for testing and development (bypasses approval entirely)
+</Tip>
+
+## Memory usage
+
+### Node.js heap
+
+ISCL Core typically uses 50-150MB of heap memory. Key consumers:
+
+| Component | Memory | Notes |
+|-----------|--------|-------|
+| Fastify server | ~30MB | Base server + routes + schema compilation |
+| SQLite (better-sqlite3) | ~10-20MB | Database file cache (in-process) |
+| Pending approval store | ~1KB per request | In-memory Map, cleaned up on TTL expiry |
+| Approval token manager | ~1KB per token | In-memory Map, cleaned up on TTL expiry |
+| AJV schema validators | ~5MB | Compiled validators, cached |
+
+For memory-constrained environments, the `--max-old-space-size` flag controls the V8 heap limit:
+
+```bash
+node --max-old-space-size=256 packages/core/src/main.ts
+```
+
+### PendingApprovalStore cleanup
+
+The in-memory pending approval store runs a cleanup interval every 30 seconds, removing expired entries (>300s TTL). This prevents memory leaks from unanswered approval requests.
+
+### ApprovalTokenManager cleanup
+
+Consumed and expired tokens are cleaned up every 60 seconds. Each token is ~200 bytes. Even at high throughput (100 tokens/hour), memory impact is negligible.
+
+## Docker performance
+
+### Container resource limits
+
+For production Docker deployments, set resource limits:
+
+```yaml
+services:
+  iscl-core:
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: 512M
+        reservations:
+          cpus: "0.25"
+          memory: 128M
+```
+
+### Volume performance
+
+The SQLite database should be on a Docker volume (not a bind mount) for best I/O performance:
+
+```yaml
+volumes:
+  audit-data:
+
+services:
+  iscl-core:
+    volumes:
+      - audit-data:/home/iscl/.iscl
+```
+
+<Warning>
+Bind mounts on macOS Docker Desktop have significant I/O overhead due to the Linux VM translation layer.
+</Warning>
+
+### Health check configuration
+
+Configure Docker health checks to avoid unnecessary restarts:
+
+```yaml
+services:
+  iscl-core:
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3100/v1/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+```
+
+## Monitoring performance
+
+### Key metrics to watch
+
+| Metric | Source | Warning Threshold |
+|--------|--------|-------------------|
+| RPC response time | Application logs (pino) | >500ms average |
+| Audit write latency | SQLite `PRAGMA compile_options` | >10ms per insert |
+| Memory usage | `process.memoryUsage()` | >400MB heap |
+| Pending approvals | `/v1/approvals/pending` | >10 stale requests |
+| SQLite DB size | File system | >1GB (check for vacuum need) |
+
+### pino log level tuning
+
+Reduce log verbosity in production:
+
+```bash
+LOG_LEVEL=warn npm run start
+```
+
+<Note>
+Debug-level logging includes full request/response bodies and can impact throughput at high volumes.
+</Note>
+
+## Summary
+
+| Optimization | Impact | Effort | Recommended For |
+|--------------|--------|--------|-----------------|
+| Use paid RPC provider | High | Low | All production deployments |
+| Per-chain RPC URLs | Medium | Low | Multi-chain deployments |
+| SQLite `synchronous = NORMAL` | Low | Low | Throughput-sensitive deployments |
+| SQLite `mmap_size` | Low | Low | Dashboard-heavy usage |
+| Multiple wallet addresses | Medium | Medium | High-throughput use cases |
+| Raise `requireApprovalAbove` | High | Low | Reduce human bottleneck |
+| Docker volume for SQLite | Medium | Low | Docker deployments on macOS |
+
+## Next steps
+
+- [Configuration Reference](/reference/config-reference) -- Environment variables and policy settings
+- [Production Deployment](/guides/production-deployment) -- Production deployment guidance
+- [Observability](/operations/observability) -- Logging and monitoring setup

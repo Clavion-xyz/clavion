@@ -38,6 +38,7 @@ export interface SwapParams extends BaseSkillParams {
   amountIn: string;
   minAmountOut: string;
   slippageBps?: number;
+  provider?: "uniswap_v3" | "1inch";
 }
 
 export interface BalanceParams {

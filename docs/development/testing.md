@@ -111,3 +111,5 @@ Security and E2E tests require Docker/Anvil and are not run in CI by default.
 - Integration tests: use `buildApp()` to create an ephemeral Fastify server on port 0, test via real HTTP
 - Security tests: test against the threat model scenarios (A1-A4, B1-B4, C1-C4)
 - All mock RPC factories must include all interface methods (check `tests/helpers/` for patterns)
+
+See the [Contributing Guide](contributing.md) for PR test requirements and coding standards.

@@ -6,15 +6,19 @@
 import { computeIntentHash } from "@clavion/core";
 import {
   validTransferIntent,
+  validTransferNativeIntent,
   validApproveIntent,
   validSwapExactInIntent,
+  validSwapExactInOneInchIntent,
   validSwapExactOutIntent,
 } from "./valid-intents.js";
 
 const hashes = {
   transfer: computeIntentHash(validTransferIntent),
+  transferNative: computeIntentHash(validTransferNativeIntent),
   approve: computeIntentHash(validApproveIntent),
   swapExactIn: computeIntentHash(validSwapExactInIntent),
+  swapExactInOneInch: computeIntentHash(validSwapExactInOneInchIntent),
   swapExactOut: computeIntentHash(validSwapExactOutIntent),
 };
 

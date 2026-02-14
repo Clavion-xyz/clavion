@@ -1,0 +1,160 @@
+---
+title: Transaction Lifecycle
+description: Every step in the execution pipeline, from intent submission to on-chain confirmation.
+---
+
+## What you will learn
+
+- The 8 stages of the transaction pipeline
+- What each stage does and what can go wrong
+- How stages are correlated in the audit trail
+
+## Pipeline overview
+
+Every fund-affecting operation flows through the same pipeline. No stage can be skipped.
+
+```text
+1. Intent Received
+2. Schema Validation
+3. Policy Evaluation
+4. Transaction Build
+5. Preflight Simulation
+6. Approval
+7. Signing + Broadcast
+8. Audit Logging
+```
+
+## Stage 1: Intent received
+
+The pipeline begins when an adapter submits a TxIntent to ISCL Core via `POST /v1/tx/approve-request`.
+
+The TxIntent is a declarative JSON document describing what the agent wants to do. It specifies the action type, parameters, constraints, and metadata -- but never raw calldata or signing instructions.
+
+**Audit event:** `intent_received`
+
+## Stage 2: Schema validation
+
+The intent is validated against the TxIntent v1 JSON Schema using AJV in strict mode:
+
+- All required fields must be present (`version`, `id`, `timestamp`, `chain`, `wallet`, `action`, `constraints`)
+- `additionalProperties: false` at every level -- no undocumented fields
+- Addresses must match `^0x[0-9a-fA-F]{40}$`
+- Amounts must be numeric strings (`^[0-9]+$`)
+- `action.type` must be one of: `transfer`, `transfer_native`, `approve`, `swap_exact_in`, `swap_exact_out`
+
+**Failure:** HTTP 400 with Fastify validation error. The pipeline stops.
+
+## Stage 3: Policy evaluation
+
+The PolicyEngine evaluates the intent against configurable rules, in order:
+
+| # | Rule | Outcome |
+|---|------|---------|
+| 1 | Chain not in `allowedChains` | **deny** |
+| 2 | Token not in `tokenAllowlist` | **deny** |
+| 3 | Contract not in `contractAllowlist` | **deny** |
+| 4 | Value exceeds `maxValueWei` | **deny** |
+| 5 | Approval amount exceeds `maxApprovalAmount` | **deny** |
+| 6 | Recipient not in `recipientAllowlist` | **deny** |
+| 7 | Risk score exceeds `maxRiskScore` | **require_approval** |
+| 8 | Rate limit exceeded (`maxTxPerHour`) | **deny** |
+
+The first `deny` stops evaluation. If no denials, the decision is `allow` or `require_approval`.
+
+**Audit event:** `policy_evaluated`
+**Failure:** HTTP 403 with `policy_denied` and reasons array.
+
+## Stage 4: Transaction build
+
+The TxBuilder constructs a concrete EVM transaction from the intent's typed parameters:
+
+| Action | Builder Output |
+|--------|---------------|
+| `transfer` | ERC-20 `transfer(address,uint256)` calldata |
+| `transfer_native` | Plain ETH value transfer (no calldata) |
+| `approve` | ERC-20 `approve(address,uint256)` calldata |
+| `swap_exact_in` | Uniswap V3 `exactInputSingle` or 1inch API calldata |
+| `swap_exact_out` | Uniswap V3 `exactOutputSingle` calldata |
+
+The builder sets: `to`, `data`, `value`, `chainId`, `type` (EIP-1559). Gas parameters are estimated later.
+
+**Audit event:** `tx_built`
+
+## Stage 5: Preflight simulation
+
+The PreflightService simulates the transaction using `eth_call` on the target chain's RPC endpoint:
+
+1. **Simulate execution** -- run `eth_call` with the built transaction
+2. **Estimate gas** -- call `eth_estimateGas`
+3. **Compute risk score** -- 7-factor analysis (value magnitude, recipient history, contract risk, gas anomaly, approval risk, chain risk, source trust)
+4. **Check balance** -- verify the wallet can cover the transfer + gas
+
+The risk score (0-100) feeds back into the policy engine. High-risk transactions may trigger `require_approval` even if the value is below the threshold.
+
+**Audit event:** `preflight_simulated`
+**Failure:** HTTP 502 if no RPC endpoint is configured.
+
+## Stage 6: Approval
+
+Based on the policy decision and risk score:
+
+- **allow** -- Transaction proceeds without human confirmation
+- **require_approval** -- The approval service prompts the operator
+
+Three approval modes are supported:
+
+| Mode | Mechanism |
+|------|-----------|
+| `cli` | Readline prompt in the ISCL Core terminal |
+| `web` | Pending request in the web dashboard + HTTP API for programmatic approval |
+| `auto` | Auto-approved (testing only -- never use in production) |
+
+The approval prompt shows: action description, risk score, estimated gas, balance diffs, and any warnings.
+
+If approved, a single-use **approval token** is issued with a 300-second TTL. The token is cryptographically bound to the intent's canonical hash.
+
+**Audit events:** `approval_requested`, `approval_decided`
+**Failure:** HTTP 403 with `user_declined` if the operator denies.
+
+## Stage 7: Signing + broadcast
+
+The `sign-and-send` endpoint performs final execution:
+
+1. **Policy re-check** -- Policy is re-evaluated to prevent TOCTOU attacks
+2. **Token validation** -- Approval token is verified: correct hash binding, not expired, not consumed
+3. **Token consumption** -- Token is marked as used (single-use enforcement)
+4. **Key unlock** -- The encrypted key is decrypted in memory using scrypt
+5. **Signing** -- ECDSA signature via viem's `signTransaction`
+6. **Broadcast** -- `eth_sendRawTransaction` to the configured RPC endpoint
+
+**Audit events:** `signed`, `broadcast`
+**Failure:** HTTP 403 with `signing_failed`, `approval_required`, or `invalid_approval_token`.
+
+## Stage 8: Audit logging
+
+Every stage writes to the append-only SQLite audit trail. All events for one transaction share the same `intentId`, enabling full lifecycle reconstruction:
+
+```sql
+SELECT event, timestamp, data FROM audit_events
+WHERE intent_id = 'demo-transfer-001'
+ORDER BY timestamp ASC;
+```
+
+Events are never updated or deleted. The audit trail is tamper-evident by design.
+
+## Error recovery
+
+| Stage | Error | Recovery |
+|-------|-------|---------|
+| Validation | Schema error | Fix the TxIntent and resubmit |
+| Policy | Denied | Adjust policy config or use different parameters |
+| Preflight | Simulation revert | Check balance, allowances, deadline |
+| Approval | User declined | Resubmit if the operator changes their mind |
+| Signing | Token expired | Get a new approval token |
+| Broadcast | Nonce conflict | Retry (auto-corrects on next attempt) |
+
+## Next steps
+
+- [Policy Engine](/concepts/policy-engine) -- Deep dive into policy rules
+- [Approval Model](/concepts/approval-model) -- Approval modes and token mechanics
+- [REST API](/reference/rest-api) -- Endpoint details for each pipeline stage

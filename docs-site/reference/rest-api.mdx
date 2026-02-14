@@ -1,0 +1,309 @@
+---
+title: REST API
+description: Complete endpoint reference for the ISCL Core HTTP API.
+---
+
+## What you will learn
+
+- All available API endpoints with request/response schemas
+- Curl examples for each endpoint
+- How endpoints map to the transaction pipeline
+
+## Base URL
+
+```text
+http://127.0.0.1:3100
+```
+
+All responses include the header `X-ISCL-Version: 0.1.0`.
+
+---
+
+## Health
+
+### GET /v1/health
+
+Health check endpoint. Always returns 200.
+
+```bash
+curl http://localhost:3100/v1/health
+```
+
+```json
+{
+  "status": "ok",
+  "version": "0.1.0",
+  "uptime": 42.123
+}
+```
+
+---
+
+## Transaction pipeline
+
+### POST /v1/tx/build
+
+Build a transaction from a TxIntent. Evaluates policy before building.
+
+**Request Body:** TxIntent (see [TxIntent Schema](/reference/txintent-schema))
+
+```bash
+curl -X POST http://localhost:3100/v1/tx/build \
+  -H "Content-Type: application/json" \
+  -d '{ "version": "1", "id": "...", ... }'
+```
+
+**Response (200):**
+
+```json
+{
+  "intentId": "550e8400-e29b-41d4-a716-446655440000",
+  "txRequestHash": "0x1234...abcd",
+  "description": "Transfer 1000000 USDC to 0xabcd...",
+  "txRequest": {
+    "to": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    "data": "0xa9059cbb...",
+    "value": "0",
+    "chainId": 8453,
+    "type": "eip1559"
+  }
+}
+```
+
+**Errors:** 400 (validation), 403 (policy denied)
+
+### POST /v1/tx/preflight
+
+Simulate a transaction and compute a risk score. Requires RPC.
+
+**Request Body:** TxIntent
+
+```bash
+curl -X POST http://localhost:3100/v1/tx/preflight \
+  -H "Content-Type: application/json" \
+  -d '{ "version": "1", ... }'
+```
+
+**Response (200):**
+
+```json
+{
+  "intentId": "...",
+  "simulationSuccess": true,
+  "riskScore": 15,
+  "gasEstimate": "52000",
+  "warnings": [],
+  "balanceDiffs": [
+    { "token": "0x8335...", "change": "-1000000" }
+  ]
+}
+```
+
+**Errors:** 400 (validation), 502 (no RPC)
+
+### POST /v1/tx/approve-request
+
+Run the full pipeline (build + preflight + approval prompt) and return an approval token.
+
+**Request Body:** TxIntent
+
+```bash
+curl -X POST http://localhost:3100/v1/tx/approve-request \
+  -H "Content-Type: application/json" \
+  -d '{ "version": "1", ... }'
+```
+
+**Response (200):**
+
+```json
+{
+  "intentId": "...",
+  "approved": true,
+  "approvalTokenId": "tok_abc123...",
+  "txRequestHash": "0x1234...abcd",
+  "description": "Transfer 1000000 of ERC-20 0x8335... to 0xReci...",
+  "riskScore": 15,
+  "warnings": []
+}
+```
+
+**Errors:** 400 (validation), 403 (policy denied, user declined)
+
+<Note>
+In `web` approval mode, this call **blocks** until the operator approves or denies via the web dashboard or HTTP API.
+</Note>
+
+### POST /v1/tx/sign-and-send
+
+Sign a transaction and broadcast it. Requires a valid approval token.
+
+**Request Body:**
+
+```json
+{
+  "intent": { "version": "1", ... },
+  "approvalTokenId": "tok_abc123..."
+}
+```
+
+```bash
+curl -X POST http://localhost:3100/v1/tx/sign-and-send \
+  -H "Content-Type: application/json" \
+  -d '{ "intent": {...}, "approvalTokenId": "..." }'
+```
+
+**Response (200):**
+
+```json
+{
+  "intentId": "...",
+  "signedTx": "0x02f8...",
+  "txHash": "0xdef456...",
+  "broadcast": true,
+  "broadcastError": null
+}
+```
+
+**Errors:** 400 (validation), 403 (policy denied, approval required, invalid token, signing failed)
+
+### GET /v1/tx/:hash
+
+Look up a transaction receipt by hash.
+
+```bash
+curl http://localhost:3100/v1/tx/0xdef456...
+```
+
+**Response (200):**
+
+```json
+{
+  "txHash": "0xdef456...",
+  "status": "success",
+  "blockNumber": 12345678,
+  "gasUsed": "52000"
+}
+```
+
+**Errors:** 404 (not found), 502 (no RPC)
+
+---
+
+## Balance
+
+### GET /v1/balance/:token/:account
+
+Look up an ERC-20 token or native ETH balance. Use `?chainId=N` for multi-chain.
+
+```bash
+# ERC-20 balance
+curl "http://localhost:3100/v1/balance/0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913/0xWallet?chainId=8453"
+
+# Native ETH balance (use 0xEeeE...eEEe as token address)
+curl "http://localhost:3100/v1/balance/0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE/0xWallet?chainId=8453"
+```
+
+**Response (200):**
+
+```json
+{
+  "token": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+  "account": "0xWallet",
+  "balance": "500000000",
+  "chainId": 8453
+}
+```
+
+**Errors:** 400 (invalid address format), 502 (no RPC)
+
+---
+
+## Approval endpoints
+
+### GET /v1/approvals/pending
+
+List pending approval requests (web mode only).
+
+```bash
+curl http://localhost:3100/v1/approvals/pending
+```
+
+```json
+{
+  "pending": [
+    {
+      "requestId": "req_abc123",
+      "summary": {
+        "action": "Transfer 100000000 of ERC-20...",
+        "riskScore": 15,
+        "warnings": []
+      },
+      "ttlSeconds": 285
+    }
+  ]
+}
+```
+
+### POST /v1/approvals/:requestId/decide
+
+Submit an approve or deny decision.
+
+```bash
+curl -X POST http://localhost:3100/v1/approvals/req_abc123/decide \
+  -H "Content-Type: application/json" \
+  -d '{ "approved": true }'
+```
+
+**Errors:** 404 (request expired or not found)
+
+### GET /v1/approvals/history
+
+Recent audit events. `?limit=N` (default 20, max 100).
+
+```bash
+curl "http://localhost:3100/v1/approvals/history?limit=5"
+```
+
+### GET /approval-ui
+
+Serves the web approval dashboard as HTML. Open in a browser.
+
+---
+
+## Skill registry
+
+### POST /v1/skills/register
+
+Register a skill manifest.
+
+```bash
+curl -X POST http://localhost:3100/v1/skills/register \
+  -H "Content-Type: application/json" \
+  -d '{ "version": "1", "name": "my-skill", ... }'
+```
+
+**Errors:** 400 (schema, signature, hash, scan), 409 (duplicate)
+
+### GET /v1/skills
+
+List all registered skills.
+
+### GET /v1/skills/:name
+
+Get skill details by name.
+
+**Errors:** 404 (skill not found)
+
+### DELETE /v1/skills/:name
+
+Revoke a registered skill.
+
+**Errors:** 404 (skill not found)
+
+---
+
+## Next steps
+
+- [TxIntent Schema](/reference/txintent-schema) -- Full schema specification
+- [Error Codes](/reference/error-codes) -- Detailed error reference
+- [Demo Flow](/start/demo-flow) -- See these endpoints in action

@@ -1,0 +1,52 @@
+{
+  "name": "@clavion/adapter-telegram",
+  "version": "0.1.0",
+  "description": "Telegram bot with inline transaction approval UI",
+  "author": "Dmitri N",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/clavion-xyz/clavion.git",
+    "directory": "packages/adapter-telegram"
+  },
+  "homepage": "https://github.com/clavion-xyz/clavion",
+  "bugs": "https://github.com/clavion-xyz/clavion/issues",
+  "keywords": [
+    "clavion",
+    "iscl",
+    "telegram",
+    "bot",
+    "adapter"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "clavion-telegram": "./dist/index.js"
+  },
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "rm -rf dist",
+    "start": "node dist/index.js"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "@clavion/adapter-shared": "0.1.0",
+    "@clavion/types": "0.1.0",
+    "grammy": "^1.35.0"
+  }
+}

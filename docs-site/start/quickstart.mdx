@@ -1,0 +1,163 @@
+---
+title: Quick Start
+description: Run Clavion and execute a demo transaction in under 10 minutes.
+---
+
+## What you will learn
+
+- How to start ISCL Core with an RPC endpoint
+- How to import a wallet key
+- How to submit a transaction intent and observe the secure execution flow
+- How to use Docker Compose for a full demo stack
+
+## Local quick start
+
+<Steps>
+  <Step title="Clone and build">
+    ```bash
+    git clone https://github.com/clavion/clavion.git
+    cd clavion
+    npm install
+    npm run build
+    ```
+  </Step>
+  <Step title="Start ISCL Core">
+    Start with a Base RPC endpoint for transaction simulation:
+    ```bash
+    ISCL_RPC_URL_8453=https://mainnet.base.org npm run dev
+    ```
+    ISCL Core is now listening on `http://127.0.0.1:3100`.
+  </Step>
+  <Step title="Verify health">
+    ```bash
+    curl http://localhost:3100/v1/health
+    ```
+    ```json
+    {
+      "status": "ok",
+      "version": "0.1.0",
+      "uptime": 2.5
+    }
+    ```
+  </Step>
+  <Step title="Import a wallet key">
+    Import an existing private key (or generate a new one):
+    ```bash
+    # Generate a new key
+    npx clavion-cli key generate
+
+    # Or import an existing key
+    echo "0xYourPrivateKey" | npx clavion-cli key import
+
+    # Verify
+    npx clavion-cli key list
+    ```
+  </Step>
+  <Step title="Check a balance">
+    Query an ERC-20 balance (USDC on Base):
+    ```bash
+    curl "http://localhost:3100/v1/balance/0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913/0xYourWalletAddress?chainId=8453"
+    ```
+    ```json
+    {
+      "token": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+      "account": "0xYourWalletAddress",
+      "balance": "1000000",
+      "chainId": 8453
+    }
+    ```
+  </Step>
+  <Step title="Submit a transaction intent">
+    Request approval for a USDC transfer:
+    ```bash
+    curl -X POST http://localhost:3100/v1/tx/approve-request \
+      -H "Content-Type: application/json" \
+      -d '{
+        "version": "1",
+        "id": "550e8400-e29b-41d4-a716-446655440001",
+        "timestamp": 1700000000000,
+        "chain": { "type": "evm", "chainId": 8453 },
+        "wallet": { "address": "0xYourWalletAddress" },
+        "action": {
+          "type": "transfer",
+          "asset": {
+            "kind": "erc20",
+            "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+          },
+          "to": "0xRecipientAddress",
+          "amount": "1000000"
+        },
+        "constraints": {
+          "maxGasWei": "1000000000000000",
+          "deadline": 1700003600,
+          "maxSlippageBps": 0
+        }
+      }'
+    ```
+    ISCL Core will:
+    1. Validate the intent against the schema
+    2. Evaluate policy rules
+    3. Run preflight simulation
+    4. Prompt you for approval (in the terminal)
+    5. Return an approval token
+
+    Approve the transaction in the terminal when prompted.
+  </Step>
+</Steps>
+
+## Docker Compose (full stack)
+
+For a complete demo with a local Anvil fork:
+
+```bash
+# Start ISCL Core + Anvil Base fork
+docker compose -f docker/compose.yaml up -d
+
+# Start the full demo stack (adds OpenClaw agent)
+docker compose -f docker/compose.yaml --profile demo up -d
+```
+
+Check that all services are running:
+
+```bash
+docker compose -f docker/compose.yaml ps
+```
+
+Follow logs:
+
+```bash
+docker compose -f docker/compose.yaml logs -f iscl-core
+```
+
+### Volume persistence
+
+| Volume | Path | Contents |
+|--------|------|----------|
+| `keystore-data` | `/home/iscl/.iscl/keystore` | Encrypted keystore files |
+| `audit-data` | `/home/iscl/.iscl/data` | Audit trail database |
+
+### Stopping
+
+```bash
+# Preserve data
+docker compose -f docker/compose.yaml down
+
+# Full reset (removes volumes)
+docker compose -f docker/compose.yaml down -v
+```
+
+## Verification
+
+After completing the quick start, verify that:
+
+<Check>ISCL Core responds to health checks at `localhost:3100`</Check>
+<Check>At least one key is listed by `clavion-cli key list`</Check>
+<Check>Balance queries return data from the configured chain</Check>
+<Check>The approval prompt appears when you submit a TxIntent</Check>
+
+## Next steps
+
+- [Demo Flow](/start/demo-flow) -- Walk through a complete transaction lifecycle
+- [CLI Reference](/start/cli) -- All key management commands
+- [Transaction Lifecycle](/concepts/transaction-lifecycle) -- Understand each pipeline stage
+- [REST API](/reference/rest-api) -- Full endpoint documentation

@@ -4,38 +4,17 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "@clavion/core";
 import { EncryptedKeystore } from "@clavion/signer";
-import { validFixtures } from "../../tools/fixtures/index.js";
+import {
+  validFixtures,
+  TEST_PRIVATE_KEY,
+  approvalRequiredConfig,
+  noApprovalConfig,
+} from "../../tools/fixtures/index.js";
 import type { FastifyInstance } from "fastify";
-import type { PolicyConfig, TxIntent } from "@clavion/types";
+import type { TxIntent } from "@clavion/types";
 
-const TEST_KEY =
-  "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80" as const;
+const TEST_KEY = TEST_PRIVATE_KEY;
 const TEST_PASSPHRASE = "test-approval";
-
-function approvalRequiredConfig(): PolicyConfig {
-  return {
-    version: "1",
-    maxValueWei: "1000000000000000000000",
-    maxApprovalAmount: "1000000000000000000000",
-    contractAllowlist: ["0x2626664c2603336E57B271c5C0b26F421741e481"],
-    tokenAllowlist: [
-      "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-      "0x4200000000000000000000000000000000000006",
-    ],
-    allowedChains: [8453],
-    recipientAllowlist: [],
-    maxRiskScore: 70,
-    requireApprovalAbove: { valueWei: "0" }, // all txs require approval
-    maxTxPerHour: 100,
-  };
-}
-
-function noApprovalConfig(): PolicyConfig {
-  return {
-    ...approvalRequiredConfig(),
-    requireApprovalAbove: { valueWei: "1000000000000000000000" }, // very high threshold
-  };
-}
 
 describe("Approval Flow — approve-request → sign-and-send", () => {
   // ── Auto-approve ──

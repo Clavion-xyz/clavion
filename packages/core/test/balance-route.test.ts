@@ -3,22 +3,12 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "@clavion/core";
+import { mockRpcClient as baseMockRpc } from "../../../tools/fixtures/index.js";
 import type { FastifyInstance } from "fastify";
 import type { RpcClient } from "@clavion/types/rpc";
 
 function mockRpcClient(overrides?: Partial<RpcClient>): RpcClient {
-  return {
-    call: async () => ({ success: true, returnData: "0x" as `0x${string}` }),
-    estimateGas: async () => 50_000n,
-    readBalance: async () => 1_000_000n,
-    readNativeBalance: async () => 0n,
-    readAllowance: async () => 0n,
-    getTransactionReceipt: async () => null,
-    sendRawTransaction: async () => "0x" as `0x${string}`,
-    getTransactionCount: async () => 0,
-    estimateFeesPerGas: async () => ({ maxFeePerGas: 1_000_000_000n, maxPriorityFeePerGas: 1_000_000_000n }),
-    ...overrides,
-  };
+  return baseMockRpc({ readBalance: async () => 1_000_000n, ...overrides });
 }
 
 describe("GET /v1/balance/:token/:account", () => {

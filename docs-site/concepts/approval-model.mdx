@@ -1,0 +1,158 @@
+---
+title: Approval Model
+description: Human-in-the-loop confirmation with CLI, web dashboard, and Telegram support.
+---
+
+## What you will learn
+
+- When and why transactions require human approval
+- The three approval modes (CLI, web, auto)
+- How approval tokens provide single-use authorization
+- How the web approval dashboard and Telegram bot work
+
+## When approval is required
+
+The policy engine determines whether a transaction needs human confirmation:
+
+| Policy Decision | Approval Required? |
+|-----------------|-------------------|
+| `allow` | No -- transaction proceeds automatically |
+| `require_approval` | Yes -- operator must confirm |
+| `deny` | N/A -- transaction is rejected |
+
+A transaction triggers `require_approval` when:
+- Its value exceeds `requireApprovalAbove.valueWei`
+- Its risk score exceeds `maxRiskScore`
+
+## Approval modes
+
+Set the mode via `ISCL_APPROVAL_MODE` environment variable:
+
+<Tabs>
+  <Tab title="CLI Mode">
+    **Mode:** `cli` (default)
+
+    A readline prompt appears in the ISCL Core terminal:
+
+    ```text
+    ┌──────────────────────────────────────────┐
+    │  APPROVAL REQUEST                         │
+    │  Action: Transfer 100 USDC to 0xAlice    │
+    │  Chain: Base (8453)                       │
+    │  Risk Score: 15/100                       │
+    │  Gas Estimate: ~0.0001 ETH               │
+    │                                           │
+    │  Approve? (y/n):                         │
+    └──────────────────────────────────────────┘
+    ```
+
+    Best for: development, single-user setups where someone watches the terminal.
+  </Tab>
+  <Tab title="Web Mode">
+    **Mode:** `web`
+
+    Approval requests are held in an in-memory `PendingApprovalStore` and exposed via HTTP:
+
+    - `GET /v1/approvals/pending` -- list pending requests
+    - `POST /v1/approvals/:requestId/decide` -- submit approve/deny
+    - `GET /approval-ui` -- browser-based approval dashboard
+
+    The web dashboard polls for pending requests every second and shows Approve/Deny buttons with risk color coding.
+
+    Best for: interactive use with browser, Telegram bot integration, multi-tool workflows.
+  </Tab>
+  <Tab title="Auto Mode">
+    **Mode:** `auto`
+
+    All transactions are automatically approved without human confirmation.
+
+    <Warning>
+    Never use `auto` mode in production. It bypasses the human-in-the-loop security guarantee.
+    </Warning>
+
+    Best for: automated testing only.
+  </Tab>
+</Tabs>
+
+## Approval tokens
+
+When a transaction is approved, ISCL Core issues an **approval token**:
+
+| Property | Value |
+|----------|-------|
+| Format | UUID v4 |
+| TTL | 300 seconds (5 minutes) |
+| Usage | Single-use (consumed on first `sign-and-send`) |
+| Binding | Cryptographically bound to the intent's canonical hash |
+
+The token prevents:
+- **Replay attacks** -- tokens cannot be reused
+- **Substitution attacks** -- approving intent A and signing intent B is impossible (hash binding)
+- **Stale approvals** -- expired tokens are rejected
+
+## Token lifecycle
+
+```text
+approve-request
+    │
+    ▼
+┌──────────────┐
+│ Token Created │  ← TTL starts (300s)
+│ Hash-bound    │
+└──────┬───────┘
+       │
+       ▼
+sign-and-send
+    │
+    ▼
+┌──────────────┐
+│ Token Verified│  ← Hash matches? Not expired? Not consumed?
+│ Token Consumed│  ← Marked as used (single-use)
+└──────┬───────┘
+       │
+       ▼
+   Signing
+```
+
+## Web approval dashboard
+
+The built-in web dashboard at `http://localhost:3100/approval-ui` provides:
+
+- Real-time polling for pending requests (1-second interval)
+- Approve / Deny buttons for each pending request
+- Risk score with color coding (green/yellow/red)
+- Recent audit history (5-second polling)
+- Dark theme, zero external dependencies
+
+No authentication is required because the API is bound to localhost.
+
+## Telegram approval
+
+The Telegram bot (`@clavion/adapter-telegram`) provides inline approval keyboards:
+
+```text
+Transfer 100.0 USDC to 0xAbCd...1234
+
+Chain: Base (8453)
+Risk Score: 15/100
+
+[Approve] [Deny]
+```
+
+Security: only the user who initiated the command can tap Approve/Deny (same-sender enforcement).
+
+Requires `ISCL_APPROVAL_MODE=web` on ISCL Core.
+
+## PendingApprovalStore
+
+In web mode, pending requests are stored in an in-memory `Map`:
+
+- **TTL:** 300 seconds per request
+- **Cleanup:** Every 30 seconds, expired entries are removed
+- **Blocking:** The `approve-request` HTTP call blocks until the operator submits a decision or the TTL expires
+
+## Next steps
+
+- [Transaction Lifecycle](/concepts/transaction-lifecycle) -- How approval fits into the full pipeline
+- [Telegram Bot Setup](/guides/building-agents#telegram-bot) -- Configure Telegram approval
+- [Web Approval Dashboard](/reference/rest-api#approval-endpoints) -- API endpoints for web approval

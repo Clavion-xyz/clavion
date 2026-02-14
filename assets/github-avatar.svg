@@ -1,0 +1,43 @@
+<svg width="500" height="500" viewBox="0 0 500 500" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Dark circular background -->
+  <circle cx="250" cy="250" r="250" fill="#0a0a0a"/>
+  <circle cx="250" cy="250" r="246" fill="none" stroke="#00ff9d" stroke-width="1" opacity="0.1"/>
+
+  <!-- Subtle radial glow behind logo -->
+  <radialGradient id="glow">
+    <stop offset="0%" stop-color="#00ff9d" stop-opacity="0.08"/>
+    <stop offset="60%" stop-color="#00ff9d" stop-opacity="0.02"/>
+    <stop offset="100%" stop-color="#00ff9d" stop-opacity="0"/>
+  </radialGradient>
+  <circle cx="250" cy="250" r="160" fill="url(#glow)"/>
+
+  <!-- Logo scaled and centered (original 72x72 viewBox → ~280px) -->
+  <g transform="translate(250, 250) scale(3.9) translate(-36, -36)">
+    <!-- Outer brackets (layer 1 — untrusted zone) -->
+    <path d="M18 12C12 12 8 16 8 22V50C8 56 12 60 18 60"
+          stroke="#00ff9d" stroke-width="2.5"
+          stroke-linecap="round" opacity="0.2"/>
+    <path d="M54 12C60 12 64 16 64 22V50C64 56 60 60 54 60"
+          stroke="#00ff9d" stroke-width="2.5"
+          stroke-linecap="round" opacity="0.2"/>
+
+    <!-- Mid brackets (layer 2 — policy engine) -->
+    <path d="M24 18C20 18 17 21 17 25V47C17 51 20 54 24 54"
+          stroke="#00ff9d" stroke-width="2.5"
+          stroke-linecap="round" opacity="0.5"/>
+    <path d="M48 18C52 18 55 21 55 25V47C55 51 52 54 48 54"
+          stroke="#00ff9d" stroke-width="2.5"
+          stroke-linecap="round" opacity="0.5"/>
+
+    <!-- Inner brackets (layer 3 — trusted core) -->
+    <path d="M30 24C28 24 26 26 26 28V44C26 46 28 48 30 48"
+          stroke="#00ff9d" stroke-width="3"
+          stroke-linecap="round"/>
+    <path d="M42 24C44 24 46 26 46 28V44C46 46 44 48 42 48"
+          stroke="#00ff9d" stroke-width="3"
+          stroke-linecap="round"/>
+
+    <!-- Core dot (key material) -->
+    <circle cx="36" cy="36" r="3" fill="#00ff9d"/>
+  </g>
+</svg>

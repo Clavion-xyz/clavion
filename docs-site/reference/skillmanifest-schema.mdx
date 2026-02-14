@@ -1,0 +1,141 @@
+---
+title: SkillManifest Schema
+description: The skill packaging format for registering and running sandboxed skills.
+---
+
+## What you will learn
+
+- The structure of a SkillManifest v1 document
+- Required fields for permissions, sandbox configuration, and file integrity
+- How manifest signing and verification works
+
+## Overview
+
+A SkillManifest is a JSON document that describes a sandboxed skill: its name, publisher, permissions, resource limits, file hashes, and a cryptographic signature. Skills must be registered via `POST /v1/skills/register` before they can execute in Domain C.
+
+## Schema structure
+
+```json
+{
+  "version": "1",
+  "name": "my-rebalancer",
+  "publisher": {
+    "name": "Operator Name",
+    "address": "0xPublisherAddress",
+    "contact": "operator@example.com"
+  },
+  "permissions": {
+    "actions": ["transfer", "swap_exact_in"],
+    "chains": [8453],
+    "network": false,
+    "filesystem": false
+  },
+  "sandbox": {
+    "memoryMb": 128,
+    "timeoutMs": 30000,
+    "allowSpawn": false
+  },
+  "files": [
+    {
+      "path": "run.mjs",
+      "sha256": "a1b2c3d4e5f6..."
+    }
+  ],
+  "signature": "0xecdsa-signature..."
+}
+```
+
+## Fields
+
+### Top-Level
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `version` | `"1"` | Yes | Schema version |
+| `name` | string | Yes | Unique skill identifier |
+| `publisher` | object | Yes | Publisher information |
+| `permissions` | object | Yes | What the skill is allowed to do |
+| `sandbox` | object | Yes | Container resource limits |
+| `files` | array | Yes | File listing with integrity hashes |
+| `signature` | string | Yes | ECDSA signature over the canonical manifest |
+
+### Publisher
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `name` | string | Yes | Publisher display name |
+| `address` | string | Yes | Ethereum address (0x + 40 hex) for signature verification |
+| `contact` | string | Yes | Contact email |
+
+### Permissions
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `actions` | string[] | Yes | Allowed TxIntent action types (e.g., `["transfer", "swap_exact_in"]`) |
+| `chains` | number[] | Yes | Allowed chain IDs |
+| `network` | boolean | Yes | Whether the container gets network access (usually `false`) |
+| `filesystem` | boolean | Yes | Whether the container gets writable filesystem (usually `false`) |
+
+### Sandbox
+
+| Field | Type | Required | Constraints | Description |
+|-------|------|----------|-------------|-------------|
+| `memoryMb` | number | Yes | 1--512 | Container memory limit in MB |
+| `timeoutMs` | number | Yes | 1000--60000 | Execution timeout in milliseconds |
+| `allowSpawn` | boolean | Yes | -- | Whether to allow child process spawning |
+
+### Files
+
+Each entry in the `files` array:
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `path` | string | Yes | File path relative to skill root |
+| `sha256` | string | Yes | SHA-256 hash of file contents |
+
+## Registration pipeline
+
+When a manifest is submitted to `POST /v1/skills/register`, it goes through 6 validation steps:
+
+<Steps>
+  <Step title="Schema Validation">
+    The manifest is validated against the JSON Schema with `additionalProperties: false`.
+  </Step>
+  <Step title="Signature Verification">
+    The ECDSA signature is verified against the `publisher.address`. The manifest is canonicalized (JCS) before verification.
+  </Step>
+  <Step title="Hash Computation">
+    A keccak256 hash of the canonical manifest is computed for the registry record.
+  </Step>
+  <Step title="File Hash Verification">
+    Each file's SHA-256 hash is compared against the declared hash in the manifest. Any mismatch rejects the registration.
+  </Step>
+  <Step title="Static Analysis">
+    The skill code is scanned for security violations: prohibited imports (`child_process`, `fs`), direct network access (`fetch`, `http`), and environment variable access (`process.env`).
+  </Step>
+  <Step title="Registry Storage">
+    The manifest and hash are stored in the SQLite registry. Duplicate names are rejected (409 Conflict).
+  </Step>
+</Steps>
+
+## Signing a manifest
+
+To sign a manifest, canonicalize the JSON (excluding the `signature` field) and produce an ECDSA signature:
+
+```typescript
+import { keccak256, toBytes } from "viem";
+import canonicalize from "canonicalize";
+
+const manifestWithoutSig = { ...manifest };
+delete manifestWithoutSig.signature;
+
+const canonical = canonicalize(manifestWithoutSig);
+const hash = keccak256(toBytes(canonical));
+const signature = await wallet.signMessage({ message: hash });
+```
+
+## Next steps
+
+- [Sandbox Security](/guides/sandbox-security) -- How sandbox isolation works in practice
+- [REST API](/reference/rest-api#skill-registry) -- Registration endpoint details
+- [TxIntent Schema](/reference/txintent-schema) -- The intent format skills can request

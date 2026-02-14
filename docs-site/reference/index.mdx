@@ -1,0 +1,41 @@
+---
+title: Reference
+description: Formal technical documentation for the ISCL API, schemas, configuration, and error codes.
+---
+
+## What you will learn
+
+This section provides reference material for developers integrating with or operating Clavion. It is organized for lookup, not for learning -- see [Concepts](/concepts/index) for explanations and [Guides](/guides/index) for walkthroughs.
+
+<CardGroup cols={2}>
+  <Card title="REST API" icon="server" href="/reference/rest-api">
+    All endpoints with request/response schemas and curl examples.
+  </Card>
+  <Card title="TxIntent Schema" icon="code" href="/reference/txintent-schema">
+    The declarative transaction format used by all adapters.
+  </Card>
+  <Card title="SkillManifest Schema" icon="puzzle-piece" href="/reference/skillmanifest-schema">
+    Skill packaging format for the sandbox registry.
+  </Card>
+  <Card title="Configuration" icon="gear" href="/reference/config-reference">
+    Environment variables, PolicyConfig, and programmatic options.
+  </Card>
+</CardGroup>
+
+<Card title="Error Codes" icon="triangle-exclamation" href="/reference/error-codes">
+  HTTP error shapes, status codes, and recovery guidance for every endpoint.
+</Card>
+
+## Base URL
+
+All API endpoints are served at:
+
+```text
+http://127.0.0.1:3100
+```
+
+The API is bound to localhost only. See [ADR-004](/concepts/architecture) for the rationale.
+
+## Authentication
+
+No authentication is required. Access control is enforced by the localhost binding (only local processes can connect) and the approval token mechanism (fund-affecting operations require human confirmation).

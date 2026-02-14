@@ -1,0 +1,227 @@
+---
+title: Demo Flow
+description: Walk through the full transaction lifecycle using a real demo scenario -- from intent submission to on-chain confirmation.
+---
+
+## What you will learn
+
+- The complete execution pipeline from intent to receipt
+- What happens at each stage (policy, simulation, approval, signing, broadcast)
+- How to observe and verify each step using the API
+
+## Prerequisites
+
+- ISCL Core running (`npm run dev`)
+- A wallet key imported ([CLI Reference](/start/cli))
+- An RPC endpoint configured (`ISCL_RPC_URL_8453=...`)
+
+## The scenario
+
+Transfer 100 USDC from your wallet to a recipient on Base chain. We will step through each API call and observe the secure execution pipeline.
+
+## Step 1: Health check
+
+Verify that ISCL Core is running and configured:
+
+```bash
+curl -s http://localhost:3100/v1/health | jq
+```
+
+```json
+{
+  "status": "ok",
+  "version": "0.1.0",
+  "uptime": 120.5
+}
+```
+
+## Step 2: Check balance
+
+Confirm the wallet has sufficient USDC:
+
+```bash
+curl -s "http://localhost:3100/v1/balance/0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913/0xYourWallet?chainId=8453" | jq
+```
+
+```json
+{
+  "token": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+  "account": "0xYourWallet",
+  "balance": "500000000",
+  "chainId": 8453
+}
+```
+
+500 USDC available (6 decimals: `500000000` = 500.0 USDC).
+
+## Step 3: Submit intent for approval
+
+Send a TxIntent to the `approve-request` endpoint. This triggers the full pipeline:
+
+```bash
+curl -s -X POST http://localhost:3100/v1/tx/approve-request \
+  -H "Content-Type: application/json" \
+  -d '{
+    "version": "1",
+    "id": "demo-transfer-001",
+    "timestamp": '"$(date +%s000)"',
+    "chain": { "type": "evm", "chainId": 8453 },
+    "wallet": { "address": "0xYourWallet" },
+    "action": {
+      "type": "transfer",
+      "asset": {
+        "kind": "erc20",
+        "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+        "symbol": "USDC",
+        "decimals": 6
+      },
+      "to": "0xRecipientAddress",
+      "amount": "100000000"
+    },
+    "constraints": {
+      "maxGasWei": "1000000000000000",
+      "deadline": '"$(( $(date +%s) + 3600 ))"',
+      "maxSlippageBps": 0
+    },
+    "metadata": {
+      "source": "demo",
+      "note": "Send 100 USDC"
+    }
+  }' | jq
+```
+
+### What happens internally
+
+<Steps>
+  <Step title="Schema Validation">
+    ISCL validates the TxIntent against the JSON Schema with `additionalProperties: false`. Invalid intents are rejected with HTTP 400.
+  </Step>
+  <Step title="Policy Evaluation">
+    The PolicyEngine checks: is the chain allowed? Is the token allowed? Is the value under the limit? Is the recipient allowed? Is the wallet under the rate limit?
+  </Step>
+  <Step title="Transaction Build">
+    The TxBuilder constructs the EVM transaction: ABI-encodes `transfer(address,uint256)`, sets the target contract, chain parameters.
+  </Step>
+  <Step title="Preflight Simulation">
+    The PreflightService runs `eth_call` against the RPC to simulate the transaction. It checks for reverts, estimates gas, and computes a 7-factor risk score.
+  </Step>
+  <Step title="Approval Prompt">
+    Based on policy and risk score, the user is prompted to approve or deny. The prompt shows: action description, risk score, estimated gas, and any warnings.
+  </Step>
+</Steps>
+
+### Response (after approval)
+
+```json
+{
+  "intentId": "demo-transfer-001",
+  "approved": true,
+  "approvalTokenId": "tok_abc123...",
+  "txRequestHash": "0x1234...abcd",
+  "description": "Transfer 100000000 of ERC-20 0x8335... to 0xReci...",
+  "riskScore": 15,
+  "warnings": []
+}
+```
+
+The `approvalTokenId` is a single-use token, valid for 300 seconds.
+
+## Step 4: Sign and broadcast
+
+Use the approval token to sign and broadcast:
+
+```bash
+curl -s -X POST http://localhost:3100/v1/tx/sign-and-send \
+  -H "Content-Type: application/json" \
+  -d '{
+    "intent": {
+      "version": "1",
+      "id": "demo-transfer-001",
+      "timestamp": 1700000000000,
+      "chain": { "type": "evm", "chainId": 8453 },
+      "wallet": { "address": "0xYourWallet" },
+      "action": {
+        "type": "transfer",
+        "asset": {
+          "kind": "erc20",
+          "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+          "symbol": "USDC",
+          "decimals": 6
+        },
+        "to": "0xRecipientAddress",
+        "amount": "100000000"
+      },
+      "constraints": {
+        "maxGasWei": "1000000000000000",
+        "deadline": 1700003600,
+        "maxSlippageBps": 0
+      },
+      "metadata": { "source": "demo" }
+    },
+    "approvalTokenId": "tok_abc123..."
+  }' | jq
+```
+
+### What happens internally
+
+1. **Policy re-check** -- Policy is re-evaluated to prevent time-of-check/time-of-use attacks
+2. **Token validation** -- The approval token is verified: correct hash binding, not expired, not consumed
+3. **Key unlock** -- The encrypted private key is decrypted in memory
+4. **Signing** -- ECDSA signature using viem's `signTransaction`
+5. **Broadcast** -- `eth_sendRawTransaction` to the configured RPC
+6. **Audit logging** -- Every step is recorded with the intent ID
+
+### Response
+
+```json
+{
+  "intentId": "demo-transfer-001",
+  "signedTx": "0x02f8...",
+  "txHash": "0xdef456...",
+  "broadcast": true,
+  "broadcastError": null
+}
+```
+
+## Step 5: Verify receipt
+
+Look up the transaction receipt:
+
+```bash
+curl -s http://localhost:3100/v1/tx/0xdef456... | jq
+```
+
+```json
+{
+  "txHash": "0xdef456...",
+  "status": "success",
+  "blockNumber": 12345678,
+  "gasUsed": "52000"
+}
+```
+
+## Step 6: Check audit trail
+
+View the audit history to confirm all steps were logged:
+
+```bash
+curl -s "http://localhost:3100/v1/approvals/history?limit=10" | jq
+```
+
+Each event in the trail corresponds to one pipeline stage, all correlated by the same `intentId`.
+
+## Verification
+
+<Check>The health endpoint returns `status: ok`</Check>
+<Check>Balance query returns the wallet's USDC balance</Check>
+<Check>Approval prompt appeared and you approved the transaction</Check>
+<Check>Sign-and-send returned a transaction hash</Check>
+<Check>The receipt shows `status: success`</Check>
+<Check>Audit history shows the complete event chain</Check>
+
+## Next steps
+
+- [Transaction Lifecycle](/concepts/transaction-lifecycle) -- Detailed explanation of each pipeline stage
+- [Policy Engine](/concepts/policy-engine) -- How policy rules affect execution
+- [REST API](/reference/rest-api) -- Full endpoint reference
+- [API Cookbook](/reference/rest-api) -- More end-to-end workflows

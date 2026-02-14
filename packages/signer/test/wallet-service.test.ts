@@ -7,14 +7,10 @@ import { privateKeyToAddress } from "viem/accounts";
 import { EncryptedKeystore, WalletService } from "@clavion/signer";
 import { ApprovalTokenManager } from "@clavion/core";
 import { AuditTraceService } from "@clavion/audit";
+import { TEST_PRIVATE_KEY, INTENT_ID, TX_REQUEST_HASH } from "../../../tools/fixtures/index.js";
 import type { SignRequest, PolicyDecision } from "@clavion/types";
 
-// Well-known test key
-const TEST_PRIVATE_KEY =
-  "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80" as `0x${string}`;
 const TEST_ADDRESS = privateKeyToAddress(TEST_PRIVATE_KEY).toLowerCase();
-const INTENT_ID = "550e8400-e29b-41d4-a716-446655440000";
-const TX_REQUEST_HASH = "0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890";
 
 function makeSignRequest(overrides: Partial<SignRequest> = {}): SignRequest {
   return {
@@ -127,7 +123,7 @@ describe("WalletService", () => {
       },
       approvalToken: token,
     });
-    await expect(walletService.sign(request)).rejects.toThrow("invalid, expired, or already consumed");
+    await expect(walletService.sign(request)).rejects.toThrow("ApprovalToken rejected: consumed");
   });
 
   test("sign() throws with expired approval token", async () => {
@@ -141,7 +137,7 @@ describe("WalletService", () => {
       },
       approvalToken: token,
     });
-    await expect(walletService.sign(request)).rejects.toThrow("invalid, expired, or already consumed");
+    await expect(walletService.sign(request)).rejects.toThrow("ApprovalToken rejected: expired");
   });
 
   test("sign() throws with wrong intentId in token", async () => {
@@ -155,7 +151,7 @@ describe("WalletService", () => {
       },
       approvalToken: token,
     });
-    await expect(walletService.sign(request)).rejects.toThrow("invalid, expired, or already consumed");
+    await expect(walletService.sign(request)).rejects.toThrow("ApprovalToken rejected: intent_mismatch");
   });
 
   test("sign() throws with locked key", async () => {
@@ -179,7 +175,7 @@ describe("WalletService", () => {
     await walletService.sign(request);
 
     // Second sign with same token should fail
-    await expect(walletService.sign(request)).rejects.toThrow("invalid, expired, or already consumed");
+    await expect(walletService.sign(request)).rejects.toThrow("ApprovalToken rejected: consumed");
   });
 
   test("signature_created event appears in audit trail", async () => {

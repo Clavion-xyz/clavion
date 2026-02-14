@@ -1,0 +1,233 @@
+---
+title: Testing Guide
+description: Test categories, fixtures, and how to write new tests.
+icon: vial
+---
+
+## What you will learn
+
+- The four test categories and what each covers
+- How to run tests by category and in watch mode
+- Where test files and fixtures live
+- How Docker and Anvil dependencies are handled
+- Guidelines for writing new tests
+
+## Test categories
+
+Clavion uses [vitest](https://vitest.dev/) as its test runner. Tests are organized into four categories by scope and requirements.
+
+| Category | Count | Requirements | What It Covers |
+|----------|-------|-------------|----------------|
+| **Unit** | ~300+ | None | Schemas, policy engine, builders, risk scorer, keystore, wallet service, approval tokens, manifest validation, scanner, ISCLClient, intent builder |
+| **Integration** | ~30+ | None | HTTP API routes, adapter client against real Fastify, skill wrappers end-to-end, rate limiting |
+| **Security** | ~28 | Docker (some tests) | Domain A isolation, Domain B integrity, Domain C sandbox enforcement, tampered package detection |
+| **E2E** | ~6 | Anvil + `BASE_RPC_URL` | Full pipeline on Anvil Base fork: build -> preflight -> approve -> sign -> broadcast |
+
+## Running tests
+
+<CodeGroup>
+
+```bash All Tests
+npm test
+```
+
+```bash Unit Tests
+npm run test:unit
+```
+
+```bash Integration Tests
+npm run test:integration
+```
+
+```bash Security Tests
+npm run test:security
+```
+
+```bash E2E Tests
+BASE_RPC_URL=https://mainnet.base.org npm run test:e2e
+```
+
+```bash Watch Mode
+npm run test:watch
+```
+
+</CodeGroup>
+
+<Note>
+E2E tests require both Anvil (from the Foundry toolchain) and a Base RPC endpoint. Set `BASE_RPC_URL` before running.
+</Note>
+
+## Test directory structure
+
+```text
+packages/*/test/                     -- Per-package unit tests
+  approval-service.test.ts
+  approval-token-manager.test.ts
+  balance-route.test.ts
+  broadcast.test.ts
+  transfer-native-builder.test.ts
+  tx-receipt-route.test.ts
+  keystore.test.ts
+  wallet-service.test.ts
+  preflight-service.test.ts
+  audit-trace.test.ts
+  skill-registry-service.test.ts
+  manifest-signer.test.ts
+  ...
+
+tests/
+  integration/                       -- Real HTTP, ephemeral Fastify servers
+    approval-flow.test.ts
+    multi-chain.test.ts
+    oneinch-swap.test.ts
+    web-approval-flow.test.ts
+    ...
+
+  security/                          -- Trust domain enforcement
+    domain-b-integrity.test.ts       -- Policy/approval enforcement, replay protection
+    sandbox-isolation.test.ts        -- Docker sandbox constraints (requires Docker)
+    key-import-security.test.ts      -- Key import security checks
+    ...
+
+  e2e/
+    full-flow.test.ts                -- Anvil fork: build -> preflight -> approve
+                                        -> sign -> broadcast
+```
+
+## Fixtures
+
+Test fixtures live in `tools/fixtures/`:
+
+| Fixture File | Contents |
+|-------------|----------|
+| `valid-intents.ts` | One valid TxIntent per action type (transfer, transfer_native, approve, swap_exact_in, swap_exact_out) |
+| `invalid-intents.ts` | Malformed and edge-case intents for rejection testing |
+| `skill-manifests.ts` | Valid and invalid SkillManifest examples |
+| `hash-fixtures.ts` | Pre-computed canonicalization hashes for determinism verification |
+
+<Warning>
+When you add a new valid fixture to `tools/fixtures/valid-intents.ts`, you **must** also add its canonical hash to `tools/fixtures/hash-fixtures.ts`. The canonicalization test iterates all entries and will fail if they are out of sync.
+</Warning>
+
+Regenerate fixture hashes:
+
+```bash
+npm run generate:hashes
+```
+
+## Skipping tests
+
+Tests that require external infrastructure skip gracefully when dependencies are unavailable:
+
+<Tabs>
+  <Tab title="Docker Tests">
+    Use `describe.skipIf(!dockerAvailable)`. Skipped when Docker is not running. Affects sandbox isolation tests in `tests/security/`.
+  </Tab>
+  <Tab title="E2E Tests">
+    Use `describe.skipIf(!anvilAvailable || !baseRpcUrl)`. Skipped without Anvil or a Base RPC endpoint. Requires `BASE_RPC_URL` environment variable.
+  </Tab>
+  <Tab title="Security Tests">
+    Tests that exercise the Docker sandbox skip without Docker. Domain B integrity tests always run regardless of Docker availability.
+  </Tab>
+</Tabs>
+
+## CI pipeline
+
+The GitHub Actions workflow (`.github/workflows/ci.yml`) runs on push to `main`/`develop` and on pull requests:
+
+```text
+checkout -> setup-node -> npm ci -> build -> lint -> format:check -> test:unit -> test:integration
+```
+
+<Note>
+Security and E2E tests require Docker/Anvil and are not run in CI by default. Run them locally before submitting PRs that touch Domain B code.
+</Note>
+
+## Writing new tests
+
+<Accordion title="Unit tests">
+Import the module directly and mock external dependencies (RPC, filesystem). Unit tests live in `packages/*/test/` alongside the package they test.
+
+```typescript
+import { describe, it, expect, vi } from "vitest";
+import { PolicyEngine } from "../src/policy-engine.js";
+
+describe("PolicyEngine", () => {
+  it("denies intent exceeding maxValueWei", () => {
+    const engine = new PolicyEngine(config);
+    const result = engine.evaluate(intent);
+    expect(result.allowed).toBe(false);
+  });
+});
+```
+
+Key rules:
+- Mock RPC clients, never make real network calls
+- Mock the filesystem for file-dependent tests
+- Use fixtures from `tools/fixtures/` for TxIntents and SkillManifests
+</Accordion>
+
+<Accordion title="Integration tests">
+Use `buildApp()` to create an ephemeral Fastify server on port 0, then test via real HTTP requests. Integration tests live in `tests/integration/`.
+
+```typescript
+import { buildApp } from "@clavion/core";
+
+const app = await buildApp({ /* config */ });
+await app.listen({ port: 0 });
+const port = (app.server.address() as any).port;
+
+const res = await fetch(`http://localhost:${port}/v1/health`);
+expect(res.status).toBe(200);
+
+await app.close();
+```
+
+Key rules:
+- Always close the Fastify instance after the test
+- Use port 0 to avoid conflicts
+- Test the full HTTP request/response cycle
+</Accordion>
+
+<Accordion title="Security tests">
+Test against the threat model scenarios (A1-A4, B1-B4, C1-C4). Security tests live in `tests/security/`.
+
+Key rules:
+- Verify Domain A code cannot access keys or sign transactions
+- Verify Domain B enforces policy and approval on every path
+- Verify Domain C sandbox restrictions are enforced
+- Flag changes to signing, key management, or approval flow for extra review
+</Accordion>
+
+<Accordion title="Mock RPC factories">
+All mock RPC factories **must** include every `RpcClient` interface method, including `readNativeBalance`. Incomplete mocks cause runtime failures in unrelated tests.
+
+```typescript
+function createMockRpc(): RpcClient {
+  return {
+    estimateGas: vi.fn().mockResolvedValue(21000n),
+    call: vi.fn().mockResolvedValue("0x"),
+    getTransactionCount: vi.fn().mockResolvedValue(0),
+    sendRawTransaction: vi.fn().mockResolvedValue("0xhash"),
+    getTransactionReceipt: vi.fn().mockResolvedValue(null),
+    readNativeBalance: vi.fn().mockResolvedValue(0n),
+  };
+}
+```
+</Accordion>
+
+## Testing requirements for PRs
+
+All pull requests must satisfy these rules:
+
+1. **`npm test` passes** -- this runs unit and integration tests.
+2. **New features include unit tests.** If you add a builder, service, route, or adapter method, add corresponding tests.
+3. **Fund-affecting features include security tests.** Changes to signing, policy enforcement, approval flow, or key management must include tests that verify Domain B integrity.
+4. **Mock RPC factories implement all `RpcClient` methods**, including `readNativeBalance`.
+5. **Test fixtures stay in sync.** New valid fixtures require corresponding hash entries.
+
+## Next steps
+
+- [Contributing Guide](/guides/contributing) -- PR process and coding standards
+- [Sandbox Security](/guides/sandbox-security) -- Container isolation testing
+- [Trust Domains](/concepts/trust-domains) -- Understanding the three trust domains

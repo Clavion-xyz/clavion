@@ -1,0 +1,337 @@
+---
+title: MCP adapter setup
+description: Connect Claude Desktop, Cursor, and other MCP clients to Clavion for secure crypto operations.
+icon: plug
+---
+
+## What you will learn
+
+- How the MCP adapter exposes ISCL crypto operations to AI assistants
+- How to configure Claude Desktop and Cursor for Clavion
+- How to invoke tools like transfers, swaps, and balance checks
+- Full parameter reference for all six MCP tools
+
+## Overview
+
+The MCP (Model Context Protocol) adapter exposes ISCL's crypto operations as MCP tools that AI assistants can invoke. When Claude Desktop or Cursor calls a tool like `clavion_transfer`, the adapter constructs a TxIntent, sends it through the full ISCL pipeline (policy, preflight, approval, signing, broadcast), and returns the result.
+
+### Available tools
+
+| Tool Name              | Action            | Description                       |
+|------------------------|-------------------|-----------------------------------|
+| `clavion_transfer`     | `transfer`        | Transfer ERC-20 tokens            |
+| `clavion_transfer_native` | `transfer_native` | Transfer native ETH           |
+| `clavion_approve`      | `approve`         | Approve ERC-20 spending allowance |
+| `clavion_swap`         | `swap_exact_in`   | Swap tokens via DEX               |
+| `clavion_balance`      | (read-only)       | Check token balance               |
+| `clavion_tx_status`    | (read-only)       | Look up transaction receipt       |
+
+## Prerequisites
+
+Before setting up the MCP adapter, ensure you have:
+
+- **ISCL Core running** on `localhost:3100`
+- **A wallet address** imported into the ISCL keystore
+- **RPC configured** for your target chain(s)
+- **Node.js 20+**
+- **An MCP client** (Claude Desktop, Cursor, or compatible IDE)
+
+## Setup
+
+<Steps>
+
+### Build the MCP adapter
+
+```bash
+cd /path/to/clavion
+npm install
+npm run build
+```
+
+The MCP adapter is built as part of the monorepo. The entry point is at `packages/adapter-mcp/dist/index.js`.
+
+### Configure your MCP client
+
+<Tabs>
+
+<Tab title="Claude Desktop">
+
+Add the Clavion MCP server to your Claude Desktop configuration file.
+
+<CodeGroup>
+
+```json macOS
+// File: ~/Library/Application Support/Claude/claude_desktop_config.json
+{
+  "mcpServers": {
+    "clavion": {
+      "command": "node",
+      "args": ["/path/to/clavion/packages/adapter-mcp/dist/index.js"],
+      "env": {
+        "ISCL_API_URL": "http://127.0.0.1:3100",
+        "ISCL_WALLET_ADDRESS": "0xYourWalletAddress"
+      }
+    }
+  }
+}
+```
+
+```json Windows
+// File: %APPDATA%\Claude\claude_desktop_config.json
+{
+  "mcpServers": {
+    "clavion": {
+      "command": "node",
+      "args": ["C:\\path\\to\\clavion\\packages\\adapter-mcp\\dist\\index.js"],
+      "env": {
+        "ISCL_API_URL": "http://127.0.0.1:3100",
+        "ISCL_WALLET_ADDRESS": "0xYourWalletAddress"
+      }
+    }
+  }
+}
+```
+
+</CodeGroup>
+
+Replace `/path/to/clavion` with the absolute path to your Clavion repository, and `0xYourWalletAddress` with the wallet address imported into your keystore.
+
+<Warning>
+You must **restart Claude Desktop** after modifying the config file for changes to take effect.
+</Warning>
+
+</Tab>
+
+<Tab title="Cursor">
+
+For Cursor IDE, add the MCP server via Cursor's settings:
+
+1. Open Cursor Settings (`Cmd+,` on macOS)
+2. Search for "MCP" or navigate to the MCP configuration section
+3. Add a new MCP server with the following configuration:
+
+```json
+{
+  "name": "clavion",
+  "command": "node",
+  "args": ["/path/to/clavion/packages/adapter-mcp/dist/index.js"],
+  "env": {
+    "ISCL_API_URL": "http://127.0.0.1:3100",
+    "ISCL_WALLET_ADDRESS": "0xYourWalletAddress"
+  }
+}
+```
+
+Replace `/path/to/clavion` with the absolute path to your Clavion repository, and `0xYourWalletAddress` with the wallet address imported into your keystore.
+
+</Tab>
+
+</Tabs>
+
+### Start ISCL Core
+
+The MCP adapter connects to a running ISCL Core instance. Start it in a terminal:
+
+```bash
+# Minimal (Base chain)
+ISCL_RPC_URL_8453=https://mainnet.base.org npm run dev
+
+# With web approval (recommended for interactive use)
+ISCL_APPROVAL_MODE=web ISCL_RPC_URL_8453=https://mainnet.base.org npm run dev
+```
+
+Verify it's running:
+
+```bash
+curl http://localhost:3100/v1/health
+```
+
+<Tip>
+Use `ISCL_APPROVAL_MODE=web` and keep the approval dashboard open in a browser tab. When Claude or Cursor requests a transaction, you will see it appear in the dashboard for approval.
+</Tip>
+
+### Use the tools
+
+Once configured, your AI assistant can invoke Clavion tools directly.
+
+**Example: Transfer tokens**
+
+Ask Claude: *"Send 100 USDC to 0xRecipientAddress on Base"*
+
+Claude will call `clavion_transfer` with:
+
+```json
+{
+  "wallet": "0xYourWalletAddress",
+  "asset": {
+    "kind": "erc20",
+    "address": "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
+    "symbol": "USDC",
+    "decimals": 6
+  },
+  "to": "0xRecipientAddress",
+  "amount": "100000000",
+  "chainId": 8453
+}
+```
+
+**Example: Check balance**
+
+Ask Claude: *"What's my USDC balance?"*
+
+Claude will call `clavion_balance` with the wallet and token addresses.
+
+**Example: Swap tokens**
+
+Ask Claude: *"Swap 0.1 WETH for USDC on Base"*
+
+Claude will call `clavion_swap` with the appropriate parameters.
+
+</Steps>
+
+## Tool parameters
+
+Full parameter reference for each MCP tool.
+
+### clavion_transfer
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `wallet` | string | Yes | Sender address (0x + 40 hex) |
+| `asset.kind` | string | Yes | Always `"erc20"` |
+| `asset.address` | string | Yes | Token contract address |
+| `asset.symbol` | string | No | Token symbol (e.g., "USDC") |
+| `asset.decimals` | number | No | Token decimals |
+| `to` | string | Yes | Recipient address |
+| `amount` | string | Yes | Amount in base units (wei) |
+| `chainId` | number | No | Chain ID (default: 8453) |
+| `maxGasWei` | string | No | Max gas limit in wei |
+
+### clavion_transfer_native
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `wallet` | string | Yes | Sender address |
+| `to` | string | Yes | Recipient address |
+| `amount` | string | Yes | Amount in wei |
+| `chainId` | number | No | Chain ID (default: 8453) |
+| `maxGasWei` | string | No | Max gas limit in wei |
+
+### clavion_swap
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `wallet` | string | Yes | Wallet performing the swap |
+| `router` | string | Yes | DEX router address |
+| `assetIn` | object | Yes | Input token (selling) |
+| `assetOut` | object | Yes | Output token (buying) |
+| `amountIn` | string | Yes | Exact input amount in base units |
+| `minAmountOut` | string | Yes | Minimum output (slippage floor) |
+| `slippageBps` | number | No | Slippage in basis points (default: 100 = 1%) |
+| `provider` | string | No | `"uniswap_v3"` or `"1inch"` |
+| `chainId` | number | No | Chain ID (default: 8453) |
+
+### clavion_balance
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `wallet` | string | Yes | Wallet address to check |
+| `token` | string | Yes | ERC-20 token contract address |
+| `chainId` | number | No | Chain ID (default: 8453) |
+
+### clavion_tx_status
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `txHash` | string | Yes | Transaction hash (0x + 64 hex) |
+
+### clavion_approve
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `wallet` | string | Yes | Owner address (0x + 40 hex) |
+| `asset.kind` | string | Yes | Always `"erc20"` |
+| `asset.address` | string | Yes | Token contract address |
+| `asset.symbol` | string | No | Token symbol |
+| `asset.decimals` | number | No | Token decimals |
+| `spender` | string | Yes | Spender address to approve |
+| `amount` | string | Yes | Allowance amount in base units |
+| `chainId` | number | No | Chain ID (default: 8453) |
+| `maxGasWei` | string | No | Max gas limit in wei |
+
+## Approval modes
+
+How the user approves transactions depends on the ISCL Core approval mode:
+
+| Mode   | Behavior                                          | Best For                      |
+|--------|---------------------------------------------------|-------------------------------|
+| `cli`  | Readline prompt in the ISCL Core terminal          | Development, single-user      |
+| `web`  | Pending in web dashboard at `/approval-ui`          | Interactive use, multi-tool   |
+| `auto` | Auto-approved (no human confirmation)              | Testing only                  |
+
+<Note>
+**Recommended for MCP:** Use `ISCL_APPROVAL_MODE=web` and keep the approval dashboard open in a browser tab. When Claude requests a transaction, you will see it appear in the dashboard for approval.
+</Note>
+
+## Multi-chain configuration
+
+The `chainId` parameter on each tool defaults to 8453 (Base). To use other chains, ensure ISCL Core has the corresponding RPC URL configured:
+
+```bash
+ISCL_RPC_URL_1=https://eth-mainnet.alchemy.com/v2/KEY \
+ISCL_RPC_URL_8453=https://base-mainnet.alchemy.com/v2/KEY \
+npm run dev
+```
+
+Then ask Claude to specify the chain: *"Send 1 ETH to 0xAlice on Ethereum mainnet"*
+
+<Tip>
+Supported chains: Ethereum (1), Optimism (10), Arbitrum (42161), Base (8453). Each chain requires its own `ISCL_RPC_URL_&lt;chainId&gt;` environment variable.
+</Tip>
+
+## Troubleshooting
+
+### Tools don't appear in Claude Desktop
+
+1. Verify the config file path is correct for your OS
+2. Check that the `command` path points to the built JS file
+3. Restart Claude Desktop after config changes
+4. Check Claude Desktop logs for MCP server startup errors
+
+### "ISCL Core not reachable"
+
+The MCP adapter checks ISCL Core health on startup. Ensure Core is running:
+
+```bash
+curl http://localhost:3100/v1/health
+```
+
+### Approval hangs
+
+If using `cli` mode, check the ISCL Core terminal for the readline prompt. If using `web` mode, open `http://localhost:3100/approval-ui` and approve the pending request.
+
+### Schema validation errors
+
+The MCP adapter validates parameters using Zod schemas. Ensure:
+
+- Addresses are checksummed 0x-prefixed (40 hex chars)
+- Amounts are string integers (no decimals, no "0x" prefix)
+- Chain IDs are positive integers
+
+## Security notes
+
+<Warning>
+The MCP adapter runs in **Domain A (untrusted)**. It cannot access private keys directly.
+</Warning>
+
+- All transactions go through the full ISCL pipeline: policy, preflight, approval, signing.
+- The adapter communicates with ISCL Core over localhost HTTP only.
+- Tool descriptions inform the AI about security properties (policy enforcement, human approval).
+- No signing material is ever exposed to the MCP transport layer.
+
+## References
+
+- [Adapter Development Tutorial](/guides/custom-adapter) -- How the MCP adapter was built
+- [API Reference](/api-reference/overview) -- Underlying API endpoints
+- [Configuration Reference](/references/configuration) -- Environment variables
+- [MCP Protocol Specification](https://modelcontextprotocol.io/) -- Official MCP documentation

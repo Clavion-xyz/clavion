@@ -4,48 +4,18 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "@clavion/core";
 import { EncryptedKeystore } from "@clavion/signer";
-import { validFixtures } from "../../../tools/fixtures/index.js";
+import {
+  validFixtures,
+  TEST_PRIVATE_KEY,
+  mockRpcClient,
+  noApprovalConfig,
+} from "../../../tools/fixtures/index.js";
 import type { FastifyInstance } from "fastify";
-import type { RpcClient } from "@clavion/types/rpc";
-import type { PolicyConfig, TxIntent, AuditEvent } from "@clavion/types";
+import type { TxIntent, AuditEvent } from "@clavion/types";
 import type { AuditTraceService } from "@clavion/audit";
 
-const TEST_KEY =
-  "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80" as const;
+const TEST_KEY = TEST_PRIVATE_KEY;
 const TEST_PASSPHRASE = "test-broadcast";
-
-function noApprovalConfig(): PolicyConfig {
-  return {
-    version: "1",
-    maxValueWei: "1000000000000000000000",
-    maxApprovalAmount: "1000000000000000000000",
-    contractAllowlist: ["0x2626664c2603336E57B271c5C0b26F421741e481"],
-    tokenAllowlist: [
-      "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913",
-      "0x4200000000000000000000000000000000000006",
-    ],
-    allowedChains: [8453],
-    recipientAllowlist: [],
-    maxRiskScore: 70,
-    requireApprovalAbove: { valueWei: "1000000000000000000000" }, // high threshold = no approval needed
-    maxTxPerHour: 100,
-  };
-}
-
-function mockRpcClient(overrides?: Partial<RpcClient>): RpcClient {
-  return {
-    call: async () => ({ success: true, returnData: "0x" as `0x${string}` }),
-    estimateGas: async () => 50_000n,
-    readBalance: async () => 10_000_000n,
-    readNativeBalance: async () => 0n,
-    readAllowance: async () => 0n,
-    getTransactionReceipt: async () => null,
-    sendRawTransaction: async () => ("0x" + "ab".repeat(32)) as `0x${string}`,
-    getTransactionCount: async () => 0,
-    estimateFeesPerGas: async () => ({ maxFeePerGas: 1_000_000_000n, maxPriorityFeePerGas: 1_000_000_000n }),
-    ...overrides,
-  };
-}
 
 describe("POST /v1/tx/sign-and-send — broadcast behavior", () => {
   // ── With RPC + successful broadcast ──

@@ -1,0 +1,103 @@
+---
+title: Architecture
+description: System components, package layout, and how they work together across three trust domains.
+---
+
+## What you will learn
+
+- How Clavion is organized as a monorepo of specialized packages
+- The role of each package in the transaction pipeline
+- How components communicate across trust domain boundaries
+
+## System overview
+
+Clavion is a monorepo of 14 TypeScript packages, each belonging to exactly one trust domain. The packages are connected by TypeScript project references and npm workspaces.
+
+```text
+┌────────────────────────────────────────────────┐
+│           Domain A (Untrusted)                 │
+│  adapter-openclaw  adapter-mcp  plugin-eliza   │
+│  adapter-telegram                              │
+│       │              │              │          │
+│       └──────────────┼──────────────┘          │
+│                      │ HTTP (localhost:3100)    │
+├──────────────────────┼─────────────────────────┤
+│           Domain B (Trusted)                   │
+│                      ▼                         │
+│              ┌─── core ───┐                    │
+│              │  API Server │                   │
+│              │  TX Builders│                   │
+│              └─────┬───────┘                   │
+│         ┌──────────┼──────────┐                │
+│      policy    preflight   signer              │
+│      audit     registry                        │
+├────────────────────────────────────────────────┤
+│           Domain C (Limited Trust)             │
+│              sandbox                           │
+│       (Docker containers, no keys)             │
+└────────────────────────────────────────────────┘
+```
+
+## Package responsibilities
+
+### Domain A -- Untrusted (Agent Adapters)
+
+| Package | Purpose |
+|---------|---------|
+| `@clavion/adapter-openclaw` | OpenClaw skill wrappers with ISCLClient |
+| `@clavion/adapter-mcp` | MCP server exposing 6 tools for Claude Desktop / Cursor |
+| `@clavion/plugin-eliza` | ElizaOS plugin with 5 actions + wallet provider |
+| `@clavion/adapter-telegram` | grammY-based Telegram bot with inline approval |
+
+All Domain A packages share a common pattern: construct a TxIntent, send it to ISCL Core via `ISCLClient` (HTTP), and return the result.
+
+### Domain B -- Trusted (ISCL Core)
+
+| Package | Purpose |
+|---------|---------|
+| `@clavion/core` | Fastify API server, TX builders, approval service, RPC routing |
+| `@clavion/signer` | Encrypted keystore (scrypt + AES-256-GCM), wallet service |
+| `@clavion/audit` | Append-only SQLite audit trail, rate limiting |
+| `@clavion/policy` | Policy engine with configurable rules |
+| `@clavion/preflight` | Transaction simulation via `eth_call`, 7-factor risk scoring |
+| `@clavion/registry` | Skill manifest validation, ECDSA signature verification |
+| `@clavion/types` | Shared TypeScript interfaces and JSON schemas |
+
+### Domain C -- Limited Trust (Sandbox)
+
+| Package | Purpose |
+|---------|---------|
+| `@clavion/sandbox` | Docker container runner with aggressive isolation |
+
+## Communication model
+
+All cross-domain communication flows through the ISCL Core HTTP API:
+
+```text
+Domain A  ──HTTP──▶  Domain B (ISCL Core API, port 3100)
+Domain C  ──HTTP──▶  Domain B (ISCL Core API, port 3100)
+```
+
+- Domain A and Domain C never communicate directly
+- No shared memory, no direct function calls, no file-based channels
+- The API is bound to `127.0.0.1` -- only local processes can connect
+
+## Technology stack
+
+| Component | Technology | Rationale |
+|-----------|-----------|-----------|
+| Language | TypeScript (ESM, Node 20+) | Type safety, ecosystem |
+| API | Fastify + JSON Schema | Performance, strict validation |
+| EVM | viem | Modern, typed, tree-shakeable |
+| Validation | AJV (strict mode) | Fast, standard-compliant |
+| Database | SQLite via better-sqlite3 | Embedded, zero-config, WAL mode |
+| Encryption | scrypt + AES-256-GCM | Industry standard key encryption |
+| Hashing | JCS + keccak256 | Deterministic canonicalization |
+| Sandbox | Docker | Process isolation, resource limits |
+| Testing | vitest | Fast, ESM-native |
+
+## Next steps
+
+- [Trust Domains](/concepts/trust-domains) -- Deep dive into the isolation model
+- [Transaction Lifecycle](/concepts/transaction-lifecycle) -- The execution pipeline in detail
+- [ADR-001: Trust Domain Isolation](/concepts/trust-domains#architectural-decision) -- Formal design rationale

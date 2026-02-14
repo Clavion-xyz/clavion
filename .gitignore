@@ -14,3 +14,10 @@ coverage/
 # Excluded directories
 archive/
 iscl-claude-code-skills/
+video/
+
+# IDE & tooling
+.agent/
+.agents/
+.cursor/
+.claude/

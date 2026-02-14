@@ -1,0 +1,529 @@
+---
+title: Architecture Decision Records
+description: Key architectural decisions and their rationale
+icon: file-lines
+---
+
+Architecture Decision Records (ADRs) document the key architectural decisions made during ISCL's design, including the context, alternatives considered, and trade-offs accepted. Each decision has been formalized and accepted by the architecture team.
+
+<AccordionGroup>
+
+<Accordion title="ADR-001: Trust Domain Isolation">
+
+**Status:** Accepted | **Date:** 2025-02-01 | **Deciders:** Architecture team
+
+### Context
+
+AI agents -- OpenClaw, ElizaOS, MCP-connected LLMs, Telegram bots -- need to perform crypto operations on behalf of users: token transfers, swaps, approvals, and balance queries. These agents run potentially untrusted code, including community-authored skills, LLM-generated actions, and third-party plugins.
+
+The core problem: how do you let AI agents sign transactions without giving them access to private keys?
+
+Existing approaches each have fundamental shortcomings:
+
+1. **Agent holds keys directly** -- Simple to implement but catastrophic if the agent is compromised. A single malicious skill or prompt injection can drain the wallet. There is no policy layer, no audit trail, and no approval step.
+
+2. **Hardware wallet with manual approval** -- Secure key isolation, but every transaction requires physical human interaction. This is incompatible with autonomous agent workflows where an agent may execute dozens of operations per hour.
+
+3. **Custodial API (third-party signing service)** -- Introduces counterparty risk, requires trusting an external entity with key material, and creates a single point of failure. Not viable for users who require self-custody.
+
+4. **Embedded TEE / secure enclave** -- Hardware-dependent, complex to deploy, and does not solve the policy or approval problem. The agent still needs to be told "yes" or "no" based on risk assessment.
+
+None of these approaches balance security with agent autonomy. The system needs to isolate keys from untrusted code while still allowing agents to request crypto operations programmatically, with configurable policy enforcement and human-in-the-loop approval when appropriate.
+
+Additional forces at play:
+
+- Multiple agent frameworks exist (OpenClaw, ElizaOS, MCP, custom bots) and the solution must be framework-agnostic.
+- Skills are authored by third parties and cannot be fully trusted, even after code review.
+- The attack surface includes prompt injection, supply chain compromise, malicious skill packages, and compromised RPC endpoints.
+- Operations range from low-risk (balance queries) to high-risk (large transfers, unlimited approvals), requiring graduated security responses.
+- Audit and compliance require a tamper-evident record of every signing operation.
+
+### Decision
+
+Divide the system into three trust domains with strict, enforced boundaries. Every line of code belongs to exactly one domain. No component straddles a boundary.
+
+**Domain A -- Untrusted (Agent Framework + Skills)**
+
+**Packages:** `@clavion/adapter-openclaw`, `@clavion/adapter-mcp`, `@clavion/plugin-eliza`, `@clavion/adapter-telegram`
+
+Domain A contains all agent-facing code: skill wrappers, intent builders, and adapter clients. Code in this domain is considered potentially compromisable at all times.
+
+**Capabilities:**
+- Construct declarative TxIntents (JSON objects describing desired operations)
+- Communicate with Domain B exclusively via localhost HTTP API
+- Read balance and transaction status data through Domain B
+
+**Restrictions:**
+- No access to private keys or any key material
+- No direct signing capability
+- No direct blockchain RPC access
+- No control over approval summaries shown to users
+- No access to policy configuration or audit data
+
+The key insight is that Domain A code expresses *intent*, never *execution*. A skill says "I want to transfer 100 USDC to 0xABC" -- it never constructs raw calldata, never sets gas parameters, and never touches a signing function.
+
+**Domain B -- Trusted (ISCL Core)**
+
+**Packages:** `@clavion/core`, `@clavion/signer`, `@clavion/audit`, `@clavion/policy`, `@clavion/preflight`, `@clavion/registry`
+
+Domain B is the only domain that holds key material and can sign transactions. Every operation follows a mandatory pipeline:
+
+```text
+TxIntent --> PolicyEngine.evaluate() --> TxBuilder.build() --> PreflightService.simulate()
+--> ApprovalService.requestApproval() --> WalletService.sign() --> Broadcast --> AuditTrace
+```
+
+No step in this pipeline can be bypassed. There is no `signRaw` API, no backdoor for "trusted" skills, and no way to skip policy evaluation. The single signing entry point (`WalletService.sign`) requires both a valid `PolicyDecision` and a single-use `ApprovalToken`.
+
+**Security guarantees:**
+- Keys are encrypted at rest (scrypt + AES-256-GCM) and decrypted only in memory for signing
+- Policy engine evaluates every intent against configurable rules (value limits, contract allowlists, token allowlists)
+- Preflight simulation detects anomalies before signing (balance changes, gas estimation, risk scoring)
+- Approval tokens are single-use with TTL -- no replay attacks
+- Every critical step is written to an append-only audit trail with `intentId` correlation
+- RPC access uses an allowlist -- only approved endpoints are contacted
+
+**Domain C -- Limited Trust (Secure Executor)**
+
+**Packages:** `@clavion/sandbox`
+
+Domain C runs untrusted skill code in isolated Docker containers with aggressive restrictions:
+
+- `--network none` by default (no network access)
+- `--read-only` root filesystem
+- `--cap-drop ALL` (all Linux capabilities dropped)
+- `--security-opt no-new-privileges`
+- seccomp profile blocks `clone`, `fork`, `exec` (no process spawning)
+- Resource limits: memory (128MB), CPU (0.5 cores), execution timeout
+
+Domain C communicates with Domain B exclusively via the ISCL Core API. Key material is never present on the container's filesystem or in its environment variables.
+
+**Boundary Enforcement**
+
+The three-domain boundary is enforced at multiple levels simultaneously:
+
+- **Package level:** Domain B packages are never imported by Domain A code. TypeScript project references enforce this at build time.
+- **Network level:** Keys are never transmitted over HTTP, even on localhost. Only approval tokens and signed transaction hashes cross the API boundary.
+- **Process level:** Sandbox containers have no access to the host filesystem where keys are stored.
+- **Runtime level:** The API server validates all inputs against strict JSON schemas (`additionalProperties: false`) -- no undocumented fields pass through.
+- **Test level:** A dedicated security test suite (`tests/security/`) verifies domain boundaries, including tests for key exfiltration attempts, import graph integrity, and cross-domain access.
+
+**Cross-Domain Communication**
+
+All communication between domains flows through the ISCL Core HTTP API at `localhost:3100`. There are no shared memory spaces, no direct function calls, and no file-based communication channels between domains.
+
+```text
+Domain A  --HTTP-->  Domain B (ISCL Core API)
+Domain C  --HTTP-->  Domain B (ISCL Core API)
+```
+
+Domain A and Domain C never communicate directly with each other.
+
+### Consequences
+
+<Tabs>
+  <Tab title="Positive">
+    - **Key isolation is physical, not just logical.** Private keys exist only in Domain B's process memory and encrypted keystore. A compromised agent skill literally cannot access them -- they are in a different process, behind an API with no key-export endpoint.
+    - **Compromised skills have limited blast radius.** The worst a malicious skill can do is submit a TxIntent, which still must pass policy evaluation, preflight simulation, and user approval before any funds move.
+    - **Every operation has an audit trail.** The append-only SQLite audit trace in Domain B records the full lifecycle of every intent, from submission through policy decision, approval, signing, and broadcast. This is essential for incident response and compliance.
+    - **Approval is flexible.** The architecture supports CLI prompts, web-based approval dashboards, and Telegram inline keyboards. Approval mode is configurable per deployment (`cli`, `web`, `auto`) and per policy rule (`requireApprovalAbove`).
+    - **Framework-agnostic design.** The localhost HTTP API is a universal integration point. Adding support for a new agent framework (e.g., a new LLM orchestrator) requires only writing a thin adapter in Domain A -- no changes to the security-critical Domain B code.
+    - **Defense in depth.** Multiple independent enforcement layers (package boundaries, process isolation, network restrictions, schema validation, policy engine, preflight simulation) mean that a single failure does not compromise the system.
+  </Tab>
+  <Tab title="Negative">
+    - **HTTP latency between domains.** Every operation from Domain A to Domain B incurs an HTTP round-trip (~1-5ms on localhost). This is acceptable for crypto operations where blockchain confirmation takes seconds, but it means ISCL is not suitable for high-frequency trading use cases.
+    - **Skills cannot optimize gas or timing directly.** Because skills express intent rather than constructing transactions, they cannot fine-tune gas parameters, MEV strategies, or precise timing. This is an intentional constraint -- it prevents skills from crafting malicious calldata -- but it limits what advanced DeFi strategies can express.
+    - **Adding new action types requires Domain B changes.** Every new type of crypto operation (e.g., a new DeFi primitive) must be implemented as a TxBuilder in Domain B. Skills cannot introduce new transaction types unilaterally. This is the intended trade-off: security over extensibility speed.
+    - **Operational complexity.** Running three trust domains means managing multiple processes (or containers), configuring RPC allowlists, and maintaining policy files. This is more complex than a single-process agent with embedded keys.
+  </Tab>
+  <Tab title="Neutral">
+    - **Localhost-only API means per-machine deployment.** ISCL Core is not a shared cloud service -- it runs alongside the agent on the same machine. This matches the self-custody model but means each deployment is independent.
+    - **Three-domain model adds conceptual overhead.** Developers must understand which domain their code belongs to and follow the corresponding rules. This is mitigated by clear package naming, documentation, and automated boundary tests.
+    - **The model is deliberately conservative for v0.1.** Features like arbitrary calldata signing, cross-chain atomic operations, and multi-party approval are deferred to future versions. The current model prioritizes provable invariants over feature breadth.
+  </Tab>
+</Tabs>
+
+</Accordion>
+
+<Accordion title="ADR-002: SQLite for Audit Trail">
+
+**Status:** Accepted | **Date:** 2025-02-01 | **Deciders:** Architecture team
+
+### Context
+
+ISCL requires an append-only audit trail that records every security-relevant step in the transaction lifecycle: intent receipt, policy evaluation, preflight simulation, approval decisions, signing events, broadcast results, and errors. This trail serves three purposes:
+
+1. **Incident forensics.** When something goes wrong -- a transaction is unexpectedly approved, a policy bypass is suspected, or funds move to an unrecognized address -- operators need a complete, tamper-evident record of every step that led to the outcome, correlated by a single intent ID.
+
+2. **Compliance and accountability.** Each audit event captures who requested what, which policy rules were applied, what risk score was calculated, whether the user approved, and when the signature was produced. This provides a provable chain of custody for every signing operation.
+
+3. **Rate limiting.** The policy engine enforces per-wallet transaction rate limits (e.g., 10 transactions per hour). This requires durable, queryable state that survives process restarts -- counting recent transactions by wallet address within a sliding time window.
+
+The audit store needs to satisfy these requirements:
+
+- **Append-only writes.** Events are inserted but never updated or deleted. This prevents retroactive tampering with the audit record.
+- **Correlation queries.** Retrieve all events for a given intent ID to reconstruct the full lifecycle of a single operation.
+- **Time-ordered retrieval.** List recent events across all intents for dashboard display and monitoring.
+- **Rate limit queries.** Count events per wallet within a time window, with efficient indexed lookups.
+- **Zero external dependencies.** ISCL is a local runtime -- it should not require a database server, connection pool, or network-accessible data store.
+- **Durability.** Events must survive process crashes without data loss.
+- **Low latency.** Audit logging is in the critical path of every transaction. Inserts must not block the pipeline.
+
+Alternatives considered:
+
+1. **PostgreSQL / MySQL** -- Full-featured relational databases. Satisfy all query requirements but introduce an external server dependency, connection management, schema migrations, and operational overhead (backups, user management, network configuration). Dramatically overweight for a local single-user runtime.
+
+2. **Flat-file JSON / JSONL** -- Simple append-only writing. No dependencies. But queries require scanning the entire file. Rate limit counts and correlation queries become O(n) as the log grows. No indexing, no transactions, no crash safety guarantees.
+
+3. **LevelDB / RocksDB** -- Embedded key-value stores. Low overhead, no external dependencies. But key-value semantics are awkward for the access patterns needed: range queries over timestamps, filtering by intent ID, counting by wallet address within a window. Would require building a secondary index layer on top.
+
+4. **In-memory only** -- Fastest option. But all audit data is lost on process restart. Unacceptable for forensics, compliance, and rate limiting that must survive restarts.
+
+### Decision
+
+Use SQLite via `better-sqlite3` as the audit trail storage engine, with WAL (Write-Ahead Logging) mode enabled.
+
+**Schema design -- two tables:**
+
+**`audit_events`** -- The primary audit trail. Each row is an immutable event.
+
+```sql
+CREATE TABLE IF NOT EXISTS audit_events (
+  id TEXT PRIMARY KEY,           -- UUID, generated per event
+  timestamp INTEGER NOT NULL,    -- Unix milliseconds (Date.now())
+  intent_id TEXT NOT NULL,       -- Correlation key linking all events for one intent
+  event TEXT NOT NULL,           -- Event type (e.g. "policy_evaluated", "signed")
+  data TEXT NOT NULL,            -- JSON payload with event-specific details
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_intent_id ON audit_events(intent_id);
+CREATE INDEX idx_event ON audit_events(event);
+CREATE INDEX idx_timestamp ON audit_events(timestamp);
+```
+
+**`rate_limit_events`** -- Lightweight table for per-wallet rate counting.
+
+```sql
+CREATE TABLE IF NOT EXISTS rate_limit_events (
+  wallet_address TEXT NOT NULL,  -- Checksummed 0x address
+  timestamp INTEGER NOT NULL     -- Unix milliseconds
+);
+
+CREATE INDEX idx_rate_wallet_ts ON rate_limit_events(wallet_address, timestamp);
+```
+
+Rate limit events are periodically cleaned up (rows older than the rate limit window are deleted) to prevent unbounded growth.
+
+**Access patterns:**
+
+The `AuditTraceService` class provides five operations:
+
+| Method | Query | Purpose |
+|--------|-------|---------|
+| `log(event, data)` | `INSERT INTO audit_events` | Append an audit event |
+| `getTrail(intentId)` | `WHERE intent_id = ? ORDER BY timestamp ASC` | Reconstruct an intent's lifecycle |
+| `getRecentEvents(limit)` | `ORDER BY timestamp DESC LIMIT ?` | Dashboard and monitoring display |
+| `recordRateLimitTick(wallet)` | `INSERT INTO rate_limit_events` | Record a transaction for rate counting |
+| `countRecentTxByWallet(wallet, windowMs)` | `WHERE wallet_address = ? AND timestamp &gt; ?` | Count recent transactions for rate limiting |
+
+All queries use prepared statements, created once at initialization and reused for every call. This eliminates SQL parsing overhead on the hot path.
+
+**WAL mode:**
+
+WAL (Write-Ahead Logging) is enabled at initialization via `PRAGMA journal_mode = WAL`. This provides:
+
+- **Concurrent reads during writes.** The audit trail can be queried (e.g., for the web dashboard) while new events are being written without blocking.
+- **Better write performance.** WAL batches writes to a separate log file before merging, reducing filesystem synchronization overhead.
+- **Crash safety.** WAL ensures that committed transactions survive process crashes. An incomplete write during a crash is automatically rolled back on next open.
+
+**Synchronous writes:**
+
+`better-sqlite3` is chosen specifically because it provides synchronous, blocking operations. In the ISCL audit context, this is a feature:
+
+- Audit writes complete before the pipeline proceeds to the next step. There is no risk of "audit gap" where a signing event occurs but the corresponding audit record is lost due to an async write queue.
+- The synchronous API simplifies error handling -- a failed write throws immediately in the calling context.
+- Latency of SQLite inserts (with WAL, on SSD) is typically 10-50 microseconds. This is negligible compared to RPC calls (~50-500ms) and blockchain confirmation (~2-12 seconds) in the same pipeline.
+
+### Consequences
+
+<Tabs>
+  <Tab title="Positive">
+    - **Zero deployment dependencies.** SQLite is embedded in the process. No database server to install, configure, monitor, or secure. The audit trail is a single file on disk.
+    - **Natural correlation model.** SQL queries make it trivial to reconstruct an intent's lifecycle (`WHERE intent_id = ?`), count events in a window (`WHERE timestamp > ?`), or analyze patterns (`GROUP BY event`).
+    - **Crash-safe durability.** WAL mode guarantees that committed events survive unexpected process termination. This is essential for an audit trail that must be tamper-evident.
+    - **Fast enough for the hot path.** Prepared statement inserts with WAL mode add microseconds of latency per audit event. Given that each transaction pipeline includes multiple RPC calls (50-500ms each), audit logging is never the bottleneck.
+    - **Portable.** The audit database is a single `.sqlite` file. It can be backed up with a file copy, moved between machines, or inspected with any SQLite client (`sqlite3` CLI, DB Browser for SQLite, DBeaver).
+    - **Rate limiting survives restarts.** Because rate limit state is persisted to SQLite, restarting ISCL Core does not reset the transaction counter. An attacker cannot bypass rate limits by triggering a process restart.
+  </Tab>
+  <Tab title="Negative">
+    - **Single-machine storage.** SQLite is not a networked database. If ISCL were to support distributed deployments (multiple Core instances sharing one audit trail), SQLite would need to be replaced or fronted by a replication layer. This is not a concern for v0.1's localhost-only model.
+    - **No built-in replication or high availability.** If the disk fails, the audit trail is lost (unless backed up). Operators should configure regular file backups for production deployments.
+    - **Schema changes require migration logic.** Adding new columns or indexes to the audit table requires explicit migration code. The current implementation uses `CREATE TABLE IF NOT EXISTS` and `CREATE INDEX IF NOT EXISTS`, which handles initial setup but not column alterations.
+    - **Data column is opaque JSON.** The `data` column stores event payloads as serialized JSON strings. This means queries that filter on payload fields (e.g., "find all events where risk score &gt; 80") require `json_extract()` in SQLite, which is functional but slower than dedicated columns.
+  </Tab>
+  <Tab title="Neutral">
+    - **WAL mode creates additional files.** SQLite in WAL mode maintains `-wal` and `-shm` files alongside the main database. These are normal and managed automatically, but operators should be aware they exist when backing up (copy all three files, or use `.backup` command).
+    - **`better-sqlite3` is a native addon.** It requires compilation during `npm install` (via `prebuild`). This adds a build step but provides the synchronous API that makes audit writes deterministic. The package is widely used (&gt;700K weekly downloads) and provides prebuilt binaries for all major platforms.
+    - **Event types are not enforced by schema.** The `event` column is free-text. Event type consistency is enforced by the `AuditTraceService` API and calling code, not by database constraints. This allows adding new event types without schema migration.
+  </Tab>
+</Tabs>
+
+</Accordion>
+
+<Accordion title="ADR-003: TxIntent Declarative Format">
+
+**Status:** Accepted | **Date:** 2025-02-01 | **Deciders:** Architecture team
+
+### Context
+
+AI agents need to perform crypto operations: token transfers, DEX swaps, spending approvals, and native ETH transfers. The question is: what format should agents use to express these requests to the signing layer?
+
+The core tension is between **expressiveness** and **safety**. A more expressive format lets agents do more things, but a more constrained format is easier to validate, simulate, and explain to users.
+
+**Approach 1: Raw Transaction Signing**
+
+The agent constructs a complete EVM transaction (`to`, `data`, `value`, gas parameters) and sends it to the signing layer for signature.
+
+Problems:
+- **No policy enforcement.** Raw calldata is opaque -- the policy engine cannot determine whether a transaction is a benign transfer or a malicious contract call without decoding every possible contract ABI.
+- **No simulation safety.** The signing layer cannot meaningfully simulate or explain what a raw transaction does without understanding the target contract.
+- **Attack surface.** A compromised agent can craft arbitrary calldata: call selfdestruct, interact with attacker-controlled contracts, set unlimited approvals, or perform reentrancy attacks. The signing layer has no semantic understanding to prevent this.
+- **No user-readable approval.** The approval prompt would show raw hex calldata. Users cannot meaningfully approve or deny what they cannot understand.
+
+**Approach 2: High-Level SDK Calls**
+
+The agent imports a crypto SDK and calls typed functions like `sdk.transfer(token, to, amount)`. The SDK handles transaction construction and signing internally.
+
+Problems:
+- **Library sharing violates trust boundaries.** If the agent imports the signing SDK, it has access to the signing functions in its process memory. A compromised agent could call signing functions directly, bypassing policy and approval.
+- **No audit trail.** Operations happen as function calls within the agent process. There is no natural interception point for logging, policy enforcement, or user confirmation.
+- **Framework coupling.** Each agent framework (OpenClaw, ElizaOS, MCP, Telegram) has different language and runtime requirements. A single SDK would need to support all of them.
+
+**Approach 3: Declarative Intent Format**
+
+The agent constructs a JSON document describing what it wants to do (action type, parameters, constraints) and submits it to a separate process for execution. The executing process handles transaction construction, policy evaluation, simulation, approval, and signing.
+
+This is the approach we evaluated and selected.
+
+### Decision
+
+Define a **TxIntent v1** JSON schema as the universal request format for all crypto operations. Agents construct TxIntents; ISCL Core interprets and executes them.
+
+**Design principles:**
+
+1. **Agents express "what", never "how".** A TxIntent says "transfer 100 USDC to 0xAlice" -- it does not specify the ERC-20 `transfer(address,uint256)` function selector, ABI encoding, gas price, nonce, or chain-specific parameters. ISCL Core handles all of that.
+
+2. **Closed set of action types.** TxIntent v1 defines exactly five action types: `transfer`, `transfer_native`, `approve`, `swap_exact_in`, and `swap_exact_out`. There is no generic "call" or "execute" action. This means every possible operation is known at compile time, can be validated against a strict schema, and can be explained in human-readable terms.
+
+3. **Strict schema validation.** The schema uses `additionalProperties: false` at every level. No undocumented fields pass validation. This prevents agents from injecting unexpected data that might be interpreted by downstream components.
+
+4. **Canonical form for integrity.** TxIntents are canonicalized using JCS (JSON Canonicalization Scheme) and hashed with keccak256. This produces a deterministic fingerprint used for approval token binding -- the token is tied to a specific intent, preventing substitution attacks.
+
+**Schema structure:**
+
+```text
+TxIntent v1
++-- version: "1"                    -- Schema version for forward compatibility
++-- id: UUID                        -- Idempotency key and audit correlation
++-- timestamp: number               -- Unix milliseconds, creation time
++-- chain
+|   +-- type: "evm"                 -- Chain family (only EVM in v1)
+|   +-- chainId: number             -- Target chain (1, 10, 42161, 8453)
+|   +-- rpcHint?: string            -- Optional RPC URL hint (informational only)
++-- wallet
+|   +-- address: "0x..."            -- Signing wallet
+|   +-- profile?: string            -- Optional wallet profile name
++-- action: (one of)
+|   +-- transfer                    -- ERC-20 transfer
+|   +-- transfer_native             -- Native ETH transfer
+|   +-- approve                     -- ERC-20 spending approval
+|   +-- swap_exact_in               -- DEX swap with exact input
+|   +-- swap_exact_out              -- DEX swap with exact output
++-- constraints
+|   +-- maxGasWei: string           -- Hard cap on gas cost
+|   +-- deadline: number            -- Unix timestamp expiry
+|   +-- maxSlippageBps: number      -- Slippage tolerance (basis points)
++-- preferences?
+|   +-- gasSpeed?: string           -- slow | normal | fast
+|   +-- privateRelay?: boolean      -- Use private mempool
++-- metadata?
+    +-- source?: string             -- Adapter name (for audit)
+    +-- note?: string               -- Human-readable context
+```
+
+**Action type definitions:**
+
+Each action type has a fixed set of fields. No action accepts arbitrary contract addresses or calldata as direct parameters.
+
+| Action | Fields | What ISCL Builds |
+|--------|--------|------------------|
+| `transfer` | `asset`, `to`, `amount` | ERC-20 `transfer(address,uint256)` call |
+| `transfer_native` | `to`, `amount` | Plain ETH value transfer (no calldata) |
+| `approve` | `asset`, `spender`, `amount` | ERC-20 `approve(address,uint256)` call |
+| `swap_exact_in` | `router`, `assetIn`, `assetOut`, `amountIn`, `minAmountOut`, `provider?` | Uniswap V3 `exactInputSingle` or 1inch API calldata |
+| `swap_exact_out` | `router`, `assetIn`, `assetOut`, `amountOut`, `maxAmountIn`, `provider?` | Uniswap V3 `exactOutputSingle` |
+
+<Warning>
+The `router` field on swap actions is validated against a known set of router addresses per chain. An agent cannot specify an arbitrary contract -- only known, audited DEX routers are accepted.
+</Warning>
+
+**What TxIntent prevents at the schema level:**
+
+By restricting operations to a closed set of action types, the format makes entire categories of attacks impossible at the schema level:
+
+- **Arbitrary contract calls.** There is no `call(address, calldata)` action type. An agent cannot interact with contracts that are not ERC-20 tokens or known DEX routers.
+- **Self-destruct or delegate calls.** No action type maps to these operations.
+- **Unlimited approvals by default.** The `approve` action requires an explicit `amount`. The policy engine can enforce a cap via `maxApprovalAmount`.
+- **Calldata injection.** ISCL Core constructs calldata from typed parameters. The agent never provides raw hex calldata.
+- **Gas manipulation.** Gas parameters are set by ISCL Core based on RPC estimation, not by the agent. The `maxGasWei` constraint provides a ceiling but not a floor.
+
+**Extensibility:**
+
+Adding a new action type requires a Domain B code change (new builder, schema entry, policy rule). This is intentional -- every new operation must be explicitly implemented, reviewed, and tested before agents can use it. The schema version field (`"1"`) allows future incompatible changes via a new version number.
+
+### Consequences
+
+<Tabs>
+  <Tab title="Positive">
+    - **Every operation is human-readable.** The approval prompt can always show a clear description: "Transfer 100 USDC to 0xAlice on Base" rather than raw hex. Users can make informed approval decisions.
+    - **Policy engine has full semantic understanding.** The policy engine knows exactly what each intent does: which tokens are involved, what value is being transferred, which contracts are targeted. This enables precise rules (token allowlists, value caps, recipient restrictions).
+    - **Preflight simulation is meaningful.** Because ISCL Core builds the transaction from typed parameters, it knows exactly what to simulate and what balance changes to expect. Anomalous simulation results (unexpected balance changes, revert) are detectable.
+    - **Framework-agnostic.** Any adapter that can produce JSON can construct a TxIntent. The format is the same whether the request comes from OpenClaw, MCP, ElizaOS, Telegram, or a future adapter.
+    - **Canonical hashing enables integrity binding.** Approval tokens are bound to specific intent hashes. Modifying any field after approval invalidates the token. This prevents substitution attacks (approve a small transfer, then swap the intent for a large one).
+  </Tab>
+  <Tab title="Negative">
+    - **Limited expressiveness.** Agents cannot perform operations outside the five defined action types. Complex DeFi strategies (flash loans, multi-step arbitrage, yield farming) require new action types to be implemented in Domain B. This limits what agents can do autonomously.
+    - **New action types require core changes.** Adding a new operation (e.g., NFT minting, bridge transfers) requires changes to the schema, a new builder, policy engine updates, preflight updates, fixture generation, and adapter updates. The process is thorough but slow.
+    - **Swap router addresses must be maintained.** The known router address list must be updated when new chains are added or DEX versions are deployed. An outdated list blocks agents from using newer contracts.
+  </Tab>
+  <Tab title="Neutral">
+    - **All amounts are strings.** Wei values can exceed JavaScript's `Number.MAX_SAFE_INTEGER` (2^53 - 1). Using strings for all amounts avoids precision loss at the schema level. ISCL Core converts to `bigint` internally for arithmetic.
+    - **The deadline is business logic, not schema validation.** The schema validates that `deadline` is a number. Checking whether the deadline has passed is done by the transaction builder at execution time, not by the JSON Schema validator.
+    - **The `provider` field on swap actions adds optional routing.** Setting `provider: "1inch"` routes through the 1inch aggregator for better pricing. The default `"uniswap_v3"` uses direct Uniswap V3 router calls. This is backward-compatible -- existing intents without the field use Uniswap V3.
+  </Tab>
+</Tabs>
+
+</Accordion>
+
+<Accordion title="ADR-004: Localhost-Only API">
+
+**Status:** Accepted | **Date:** 2025-02-01 | **Deciders:** Architecture team
+
+### Context
+
+ISCL Core exposes an HTTP API that accepts transaction intents, returns approval tokens, and triggers signing operations. The fundamental question is: who should be able to reach this API?
+
+The API surface is security-critical. It can:
+- Trigger transaction signing (with valid approval tokens)
+- Read wallet balances and transaction history
+- Approve or deny pending transactions
+- Register and manage skills
+- Access audit trail data
+
+If this API were exposed to the network, it would become a target for:
+
+1. **Remote exploitation.** An attacker on the same network (or internet, if port-forwarded) could submit TxIntents directly, bypassing the agent entirely. While policy and approval would still apply, the attack surface expands dramatically.
+
+2. **Man-in-the-middle on approval tokens.** Approval tokens are bearer tokens -- anyone who holds one can use it to trigger signing. If tokens traverse a network, they can be intercepted.
+
+3. **Information disclosure.** Balance queries, audit trail data, and pending approval details contain sensitive financial information.
+
+4. **Denial of service.** An exposed API can be flooded with requests, overwhelming the single-process ISCL Core.
+
+**Deployment model implications:**
+
+ISCL is designed as a **local runtime** -- it runs on the same machine as the AI agent, providing a secure signing service to co-located software. This is fundamentally different from a cloud API or shared service model.
+
+The target users are:
+- Individual operators running an AI agent on their workstation or VPS
+- Development teams running agents in containerized environments (Docker Compose)
+- Small-team deployments where agent and signer co-locate by design
+
+These users benefit from zero-configuration security. They should not need to set up TLS certificates, API authentication, firewall rules, or network policies to get a secure deployment.
+
+**Alternatives considered:**
+
+1. **Network-accessible API with authentication** -- Expose on `0.0.0.0` with API key or JWT auth. This would allow remote agents to connect to a shared ISCL Core. However, it introduces authentication management, token rotation, TLS certificate management, and a larger attack surface. For v0.1, this complexity is not justified.
+
+2. **Unix domain socket** -- Bind to a filesystem socket instead of TCP. Provides strong access control via filesystem permissions. However, Docker networking does not natively support Unix sockets for inter-container communication, and the Fastify ecosystem has better-tested TCP support. Could be considered for v0.2.
+
+3. **mTLS with client certificates** -- Mutual TLS ensures both parties are authenticated. Strong security but very high operational overhead: certificate generation, distribution, rotation, and CA management. Completely disproportionate for a localhost service.
+
+### Decision
+
+Bind the ISCL Core HTTP API exclusively to `127.0.0.1` (IPv4 loopback). Do not bind to `0.0.0.0` or any network-facing interface.
+
+**Implementation details:**
+
+**Fastify listen configuration:**
+
+```typescript
+await server.listen({ host: "127.0.0.1", port: 3100 });
+```
+
+By binding to `127.0.0.1`, the operating system's TCP/IP stack ensures that only processes on the same machine can connect. No firewall configuration, TLS, or authentication is needed -- the OS enforces access control.
+
+**Docker Compose networking:**
+
+In the Docker Compose stack, services communicate through Docker's internal network. The ISCL Core service binds to `0.0.0.0` inside the container (to be reachable from other containers on the Docker network), but the port is only published to localhost on the host:
+
+```yaml
+ports:
+  - "127.0.0.1:3100:3100"
+```
+
+This means the host machine can reach the API at `localhost:3100`, but the port is not exposed on any external network interface.
+
+**No authentication required:**
+
+Because only local processes can reach the API, the system does not implement request authentication (API keys, JWTs, cookies). This is a deliberate simplification. The approval flow provides human authorization for fund-affecting operations; the network binding provides access control.
+
+The one exception is the approval token mechanism: `sign-and-send` requires a valid, single-use approval token. This is not authentication (it does not identify the caller) but authorization (it proves the operation was approved by a human).
+
+**When localhost-only is insufficient:**
+
+The localhost binding is appropriate for v0.1. Future versions may need network-accessible deployments for:
+
+- **Remote agents connecting to a central signer** (e.g., multiple agents on different machines sharing one keystore)
+- **Mobile approval workflows** (user approves from a phone, signer is on a server)
+- **Multi-machine Docker Swarm or Kubernetes deployments**
+
+These scenarios would require adding authentication, TLS, and rate limiting at the API level. The architecture supports this extension -- the Fastify server can be configured with additional middleware without changing the core signing pipeline.
+
+<Note>
+Future versions may support network-accessible deployments (remote agents, mobile approval, Kubernetes) by adding Fastify middleware for authentication and TLS -- no changes to routes or the signing pipeline required.
+</Note>
+
+### Consequences
+
+<Tabs>
+  <Tab title="Positive">
+    - **Zero-configuration security.** New deployments are secure by default. There is no "forgot to set up auth" failure mode. The OS enforces that only local processes can connect.
+    - **No credential management.** No API keys to rotate, no certificates to renew, no secrets to distribute. This eliminates an entire category of operational overhead and security risk.
+    - **Defense in depth with approval tokens.** Even if a local process submits malicious intents, it still needs a valid approval token (which requires human confirmation) to trigger signing. Localhost binding + approval tokens provide two independent access control layers.
+    - **Simple containerization.** Docker Compose uses standard port mapping (`127.0.0.1:3100:3100`) to maintain the localhost guarantee. No service mesh or overlay network configuration required.
+    - **Reduced attack surface.** Network-accessible APIs must defend against the full spectrum of network attacks: port scanning, brute force, DDoS, TLS downgrade, session hijacking. A localhost-only API faces none of these.
+  </Tab>
+  <Tab title="Negative">
+    - **Single-machine constraint.** The agent and ISCL Core must run on the same machine (or in the same Docker network). Remote agents cannot connect. This is the intended model for v0.1 but limits deployment flexibility.
+    - **No mobile approval without a proxy.** If the operator wants to approve transactions from a phone, they need a reverse proxy or VPN to reach the localhost API. The web approval UI is designed for same-machine browser access.
+    - **Cannot horizontally scale.** Multiple ISCL Core instances cannot share a load balancer because each is localhost-bound. Each instance manages its own keystore and audit trail independently.
+  </Tab>
+  <Tab title="Neutral">
+    - **Port 3100 is not well-known.** The default port does not conflict with common services (3000 is often used by development servers, 8080 by web servers). However, operators should verify it is available in their environment.
+    - **Docker networking requires awareness.** Inside Docker, "localhost" means the container itself, not the host. Services must use the Docker service name (`iscl-core`) or the container's internal IP to reach ISCL Core. This is standard Docker practice but can confuse newcomers.
+    - **Future migration path is clear.** Adding network authentication in v0.2+ would involve adding a Fastify middleware plugin. No changes to routes, handlers, or the signing pipeline are needed. The localhost-only decision does not create architectural debt.
+  </Tab>
+</Tabs>
+
+</Accordion>
+
+</AccordionGroup>
+
+## Next steps
+
+- [Trust Domains](/concepts/trust-domains) -- The isolation model referenced by ADR-001
+- [Architecture](/concepts/architecture) -- System components and package layout
+- [Transaction Lifecycle](/concepts/transaction-lifecycle) -- The execution pipeline referenced by ADR-003
+- [Configuration Reference](/reference/config-reference) -- PolicyConfig fields referenced throughout

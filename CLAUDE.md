@@ -19,8 +19,11 @@ packages/
 ├── sandbox/            @clavion/sandbox    — Container isolation runner
 ├── core/               @clavion/core       — API server, tx builders, approval
 ├── adapter-openclaw/   @clavion/adapter-openclaw — OpenClaw thin skill wrappers
+├── adapter-mcp/        @clavion/adapter-mcp — MCP server for Claude Desktop, Cursor, IDEs
+├── plugin-eliza/       @clavion/plugin-eliza — ElizaOS (ai16z) plugin with 5 actions
+├── adapter-telegram/   @clavion/adapter-telegram — Telegram bot (agent + approval UI)
 ├── sdk/                @clavion/sdk        — SDK interface (stub, v0.2)
-└── cli/                @clavion/cli        — Operational CLI (stub, v0.2)
+└── cli/                @clavion/cli        — Key management CLI (import, generate, list)
 
 tests/                  Cross-package integration, security, and e2e tests
 tools/                  Fixture generation, hash utilities
@@ -33,7 +36,7 @@ docker/                 Dockerfile and compose configuration
 
 Every line of code belongs to exactly one trust domain. Never blur these boundaries.
 
-- **Domain A (Untrusted):** OpenClaw + agent skills (`@clavion/adapter-openclaw`). No keys, no direct RPC, no signing.
+- **Domain A (Untrusted):** OpenClaw + agent skills (`@clavion/adapter-openclaw`, `@clavion/adapter-mcp`, `@clavion/plugin-eliza`). No keys, no direct RPC, no signing.
 - **Domain B (Trusted):** ISCL Core (`@clavion/core`, `@clavion/signer`, `@clavion/audit`, `@clavion/policy`, `@clavion/preflight`, `@clavion/registry`). Keys, policy, signing, audit, RPC access.
 - **Domain C (Limited Trust):** Secure Executor (`@clavion/sandbox`). No keys, API-only communication with Core.
 
@@ -85,17 +88,21 @@ npm run generate:hashes                # Regenerate fixture hashes
 ## API Endpoints
 
 ```
-GET  /v1/health                    — Version + status
-POST /v1/tx/build                  — Build transaction from TxIntent
-POST /v1/tx/preflight              — Simulate & score risk
-POST /v1/tx/approve-request        — Prompt user, issue approval token
-POST /v1/tx/sign-and-send          — Sign & broadcast (requires valid approval token)
-GET  /v1/tx/:hash                  — Get transaction receipt
-GET  /v1/balance/:token/:account   — ERC-20 balance lookup
-POST /v1/skills/register           — Register a skill manifest
-GET  /v1/skills                    — List registered skills
-GET  /v1/skills/:name              — Get skill details
-DELETE /v1/skills/:name            — Revoke a skill
+GET  /v1/health                        — Version + status
+POST /v1/tx/build                      — Build transaction from TxIntent
+POST /v1/tx/preflight                  — Simulate & score risk
+POST /v1/tx/approve-request            — Prompt user, issue approval token
+POST /v1/tx/sign-and-send              — Sign & broadcast (requires valid approval token)
+GET  /v1/tx/:hash                      — Get transaction receipt
+GET  /v1/balance/:token/:account       — ERC-20 or native balance (?chainId=N for multi-chain)
+GET  /v1/approvals/pending             — List pending web approval requests
+POST /v1/approvals/:requestId/decide   — Submit approve/deny decision { approved: boolean }
+GET  /v1/approvals/history             — Recent audit events (?limit=N, max 100)
+GET  /approval-ui                      — Web approval dashboard (HTML)
+POST /v1/skills/register               — Register a skill manifest
+GET  /v1/skills                        — List registered skills
+GET  /v1/skills/:name                  — Get skill details
+DELETE /v1/skills/:name                — Revoke a skill
 ```
 
 ## Key Package Paths
@@ -105,12 +112,37 @@ DELETE /v1/skills/:name            — Revoke a skill
 | `@clavion/types` | `packages/types/src/index.ts` (interfaces), `packages/types/src/schemas/` (JSON schemas) |
 | `@clavion/audit` | `packages/audit/src/audit-trace-service.ts` |
 | `@clavion/policy` | `packages/policy/src/policy-engine.ts`, `packages/policy/src/policy-config.ts` |
-| `@clavion/signer` | `packages/signer/src/keystore.ts`, `packages/signer/src/wallet-service.ts` |
+| `@clavion/signer` | `packages/signer/src/keystore.ts`, `packages/signer/src/wallet-service.ts`, `packages/signer/src/mnemonic.ts` |
 | `@clavion/preflight` | `packages/preflight/src/preflight-service.ts`, `packages/preflight/src/risk-scorer.ts` |
 | `@clavion/registry` | `packages/registry/src/skill-registry-service.ts`, `packages/registry/src/manifest-signer.ts` |
 | `@clavion/sandbox` | `packages/sandbox/src/sandbox-runner.ts` |
 | `@clavion/core` | `packages/core/src/api/app.ts`, `packages/core/src/api/routes/tx.ts`, `packages/core/src/tx/builders/` |
 | `@clavion/adapter-openclaw` | `packages/adapter-openclaw/src/shared/iscl-client.ts`, `packages/adapter-openclaw/src/skills/` |
+| `@clavion/adapter-mcp` | `packages/adapter-mcp/src/server.ts`, `packages/adapter-mcp/src/tools/` |
+| `@clavion/plugin-eliza` | `packages/plugin-eliza/src/index.ts`, `packages/plugin-eliza/src/service.ts`, `packages/plugin-eliza/src/actions/` |
+| `@clavion/adapter-telegram` | `packages/adapter-telegram/src/bot.ts`, `packages/adapter-telegram/src/commands/`, `packages/adapter-telegram/src/approval/` |
+| `@clavion/cli` | `packages/cli/src/main.ts`, `packages/cli/src/commands/key.ts`, `packages/cli/src/io.ts` |
+
+## CLI Commands
+
+```bash
+clavion-cli key import             # Import private key from stdin
+clavion-cli key import-mnemonic    # Import from BIP-39 mnemonic (stdin)
+clavion-cli key generate           # Generate new random key
+clavion-cli key list               # List keystore addresses
+```
+
+Options: `--keystore-path <dir>`, `--account-index <n>`, `--address-index <n>`
+
+## 1inch DEX Aggregator
+
+Swap actions support an optional `provider` field: `"uniswap_v3"` (default) or `"1inch"`. When `provider: "1inch"` and `ONEINCH_API_KEY` is set, swaps use the 1inch Swap API v6 for better routing across DEXs. Falls back to Uniswap V3 automatically on failure.
+
+- **Env var:** `ONEINCH_API_KEY` — optional, enables 1inch integration
+- **1inch router:** `0x111111125421cA6dc452d289314280a0f8842A65` (same on all 4 chains)
+- **Limitation:** `swap_exact_out` not supported by 1inch — always uses Uniswap V3
+- **Key files:** `packages/core/src/aggregator/oneinch-client.ts`, `packages/core/src/tx/builders/swap-oneinch-builder.ts`
+- **`buildFromIntent()` is async** — all call sites must `await` it
 
 ## Key Design Rules
 

@@ -4,6 +4,8 @@ Base URL: `http://127.0.0.1:3100`
 
 All responses include the header `X-ISCL-Version: 0.1.0`.
 
+> See also: [Error Catalog](errors.md) for a complete reference of every HTTP error returned by every endpoint.
+
 ---
 
 ## GET /v1/health
@@ -283,11 +285,14 @@ curl http://localhost:3100/v1/tx/0xabcdef1234567890abcdef1234567890abcdef1234567
 
 ## GET /v1/balance/:token/:account
 
-Look up an ERC-20 token balance. Requires `BASE_RPC_URL` to be configured.
+Look up an ERC-20 token or native ETH balance. Requires an RPC endpoint to be configured.
 
 **Path Parameters:**
 - `token` — ERC-20 contract address (`0x` + 40 hex chars)
 - `account` — Wallet address (`0x` + 40 hex chars)
+
+**Query Parameters:**
+- `chainId` — (optional) Target chain ID for multi-chain setups. Uses primary RPC if omitted.
 
 **Response (200):**
 ```json
@@ -310,7 +315,139 @@ Look up an ERC-20 token balance. Requires `BASE_RPC_URL` to be configured.
 
 **Example:**
 ```bash
+# Balance on default chain
 curl http://localhost:3100/v1/balance/0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913/0x1234567890abcdef1234567890abcdef12345678
+
+# Balance on Ethereum mainnet
+curl "http://localhost:3100/v1/balance/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/0x1234...?chainId=1"
+```
+
+---
+
+## Web Approval Endpoints
+
+These endpoints power the web approval dashboard (`ISCL_APPROVAL_MODE=web`). Used by the browser-based approval UI and the Telegram bot adapter.
+
+### GET /v1/approvals/pending
+
+List all pending approval requests awaiting human decision.
+
+**Response (200):**
+```json
+{
+  "pending": [
+    {
+      "requestId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      "summary": {
+        "intentId": "550e8400-e29b-41d4-a716-446655440000",
+        "action": "transfer",
+        "recipient": "0xabcd...1234",
+        "expectedOutcome": "Transfer 1000000 USDC to 0xabcd...",
+        "riskScore": 20,
+        "riskReasons": [],
+        "warnings": [],
+        "gasEstimateEth": "65000 gas",
+        "txRequestHash": "0x1234...abcd",
+        "balanceDiffs": []
+      },
+      "createdAt": 1700000000000,
+      "expiresAt": 1700000300000
+    }
+  ]
+}
+```
+
+### POST /v1/approvals/:requestId/decide
+
+Submit an approve or deny decision for a pending request.
+
+**Path Parameters:**
+- `requestId` — The pending approval request ID
+
+**Request Body:**
+```json
+{ "approved": true }
+```
+
+**Response (200):**
+```json
+{ "decided": true, "requestId": "a1b2c3d4...", "approved": true }
+```
+
+**Response (404) — Not found or expired:**
+```json
+{ "error": "not_found", "message": "Approval request not found or expired." }
+```
+
+### GET /v1/approvals/history
+
+Recent audit events for the approval dashboard.
+
+**Query Parameters:**
+- `limit` — (optional) Number of events to return, 1-100. Default: 20.
+
+**Response (200):**
+```json
+{
+  "events": [
+    {
+      "event": "tx_built",
+      "intentId": "550e8400-...",
+      "timestamp": 1700000000000,
+      "data": { "txRequestHash": "0x1234...", "description": "Transfer 1000000 USDC to 0xabcd..." }
+    }
+  ]
+}
+```
+
+### GET /approval-ui
+
+Serves the web approval dashboard as a single HTML page. Dark theme, auto-polling, zero external dependencies.
+
+```bash
+open http://localhost:3100/approval-ui
+```
+
+---
+
+## Skill Registry Endpoints
+
+### POST /v1/skills/register
+
+Register a skill manifest. Validates schema, verifies ECDSA signature, checks file hashes, and runs static analysis.
+
+**Request Body:** SkillManifest (see [schemas.md](schemas.md))
+
+**Response (200):**
+```json
+{ "registered": true, "name": "my-skill", "publisherAddress": "0x1234..." }
+```
+
+### GET /v1/skills
+
+List all active registered skills.
+
+**Response (200):**
+```json
+{ "skills": [{ "name": "my-skill", "publisherAddress": "0x1234...", "status": "active" }] }
+```
+
+### GET /v1/skills/:name
+
+Get a registered skill by name.
+
+**Response (200):**
+```json
+{ "name": "my-skill", "publisherAddress": "0x1234...", "manifest": { ... }, "status": "active" }
+```
+
+### DELETE /v1/skills/:name
+
+Revoke a registered skill. Audit-logged as `skill_revoked`.
+
+**Response (200):**
+```json
+{ "revoked": true, "name": "my-skill" }
 ```
 
 ---
@@ -324,14 +461,14 @@ curl http://localhost:3100/v1/balance/0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913
   timestamp: number,     // Unix epoch (seconds)
   chain: {
     type: "evm",
-    chainId: number,
+    chainId: number,     // 1, 10, 42161, 8453
     rpcHint?: string
   },
   wallet: {
     address: string,     // 0x-prefixed, 40 hex chars
     profile?: string
   },
-  action: TransferAction | ApproveAction | SwapExactInAction | SwapExactOutAction,
+  action: TransferAction | TransferNativeAction | ApproveAction | SwapExactInAction | SwapExactOutAction,
   constraints: {
     maxGasWei: string,   // Integer as string
     deadline: number,    // Unix epoch
@@ -346,10 +483,21 @@ curl http://localhost:3100/v1/balance/0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913
 
 **Transfer:** `{ type: "transfer", asset: Asset, to: string, amount: string }`
 
+**Transfer Native:** `{ type: "transfer_native", to: string, amount: string }` — Native ETH, no asset field.
+
 **Approve:** `{ type: "approve", asset: Asset, spender: string, amount: string }`
 
-**Swap Exact In:** `{ type: "swap_exact_in", router: string, assetIn: Asset, assetOut: Asset, amountIn: string, minAmountOut: string }`
+**Swap Exact In:** `{ type: "swap_exact_in", router: string, provider?: "uniswap_v3" | "1inch", assetIn: Asset, assetOut: Asset, amountIn: string, minAmountOut: string }`
 
-**Swap Exact Out:** `{ type: "swap_exact_out", router: string, assetIn: Asset, assetOut: Asset, amountOut: string, maxAmountIn: string }`
+**Swap Exact Out:** `{ type: "swap_exact_out", router: string, provider?: "uniswap_v3" | "1inch", assetIn: Asset, assetOut: Asset, amountOut: string, maxAmountIn: string }`
 
 **Asset:** `{ kind: "erc20", address: string, symbol?: string, decimals?: number }`
+
+### Supported Chains
+
+| Chain | Chain ID | Env Var |
+|-------|----------|---------|
+| Ethereum | 1 | `ISCL_RPC_URL_1` |
+| Optimism | 10 | `ISCL_RPC_URL_10` |
+| Arbitrum | 42161 | `ISCL_RPC_URL_42161` |
+| Base | 8453 | `ISCL_RPC_URL_8453` or `BASE_RPC_URL` |

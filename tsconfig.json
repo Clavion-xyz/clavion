@@ -36,7 +36,11 @@
     { "path": "packages/registry" },
     { "path": "packages/sandbox" },
     { "path": "packages/core" },
+    { "path": "packages/adapter-shared" },
     { "path": "packages/adapter-openclaw" },
+    { "path": "packages/adapter-mcp" },
+    { "path": "packages/plugin-eliza" },
+    { "path": "packages/adapter-telegram" },
     { "path": "packages/sdk" },
     { "path": "packages/cli" }
   ]

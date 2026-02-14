@@ -48,20 +48,66 @@ BASE_RPC_URL=https://mainnet.base.org npm run dev
 
 ## Docker Compose (Full Stack)
 
-Start ISCL Core + Anvil Base fork:
+The Compose file lives at `docker/compose.yaml`. Run all commands from the repository root using the `-f` flag, or `cd docker/` first.
+
+### Start ISCL Core + Anvil Base Fork
 
 ```bash
-docker compose up
+docker compose -f docker/compose.yaml up -d
 ```
 
-Start the full demo stack (ISCL Core + Anvil + OpenClaw):
+By default, Anvil forks Base mainnet via `https://mainnet.base.org`. To use a different RPC provider (recommended for reliability), set the `BASE_FORK_RPC_URL` environment variable:
 
 ```bash
-docker compose --profile demo up -d
+BASE_FORK_RPC_URL=https://base-mainnet.g.alchemy.com/v2/YOUR_KEY \
+  docker compose -f docker/compose.yaml up -d
+```
+
+### Start the Full Demo Stack (ISCL Core + Anvil + OpenClaw)
+
+The `demo` profile adds the OpenClaw agent container:
+
+```bash
+docker compose -f docker/compose.yaml --profile demo up -d
+```
+
+### Volume Persistence
+
+The Compose stack uses named Docker volumes to persist data across restarts:
+
+| Volume | Container Path | Contents |
+|--------|---------------|----------|
+| `keystore-data` | `/home/iscl/.iscl/keystore` | Encrypted keystore files |
+| `audit-data` | `/home/iscl/.iscl/data` | Audit trace SQLite database |
+| `openclaw-config` | `/home/node/.openclaw` | OpenClaw agent config (demo profile only) |
+
+### Checking Logs
+
+```bash
+# Follow ISCL Core logs
+docker compose -f docker/compose.yaml logs -f iscl-core
+
+# Follow Anvil logs
+docker compose -f docker/compose.yaml logs -f anvil
+
+# Follow all services
+docker compose -f docker/compose.yaml logs -f
+```
+
+### Stopping the Stack
+
+```bash
+# Stop containers but preserve volumes (keystore, audit DB, config)
+docker compose -f docker/compose.yaml down
+
+# Stop containers AND remove all volumes (full reset)
+docker compose -f docker/compose.yaml down -v
 ```
 
 ## Next Steps
 
 - [Dev Setup](development/dev-setup.md) -- Environment variables, policy configuration, Docker details
+- [Configuration Reference](configuration.md) -- All configuration options in one place
 - [API Reference](api/overview.md) -- All endpoints with examples
 - [Testing Guide](development/testing.md) -- How to run each test category
+- [Deployment Guide](operations/deployment.md) -- Production deployment, Docker, security hardening

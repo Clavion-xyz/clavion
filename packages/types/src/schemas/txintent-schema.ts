@@ -58,6 +58,7 @@ export const TxIntentSchema = {
     },
     metadata: {
       type: "object",
+      additionalProperties: false,
       properties: {
         source: { type: "string" },
         note: { type: "string" },
@@ -105,6 +106,7 @@ export const TxIntentSchema = {
       properties: {
         type: { const: "swap_exact_in" },
         router: { type: "string", pattern: "^0x[0-9a-fA-F]{40}$" },
+        provider: { enum: ["uniswap_v3", "1inch"] },
         assetIn: { $ref: "#/$defs/asset" },
         assetOut: { $ref: "#/$defs/asset" },
         amountIn: { type: "string", pattern: "^[0-9]+$" },
@@ -118,6 +120,7 @@ export const TxIntentSchema = {
       properties: {
         type: { const: "swap_exact_out" },
         router: { type: "string", pattern: "^0x[0-9a-fA-F]{40}$" },
+        provider: { enum: ["uniswap_v3", "1inch"] },
         assetIn: { $ref: "#/$defs/asset" },
         assetOut: { $ref: "#/$defs/asset" },
         amountOut: { type: "string", pattern: "^[0-9]+$" },

@@ -10,6 +10,7 @@ services:
       - ISCL_HOST=0.0.0.0
       - ISCL_PORT=3100
       - BASE_RPC_URL=http://anvil:8545
+      - ISCL_RPC_URL_8453=http://anvil:8545
       - ISCL_AUTO_APPROVE=true
       - ISCL_DEMO_PASSPHRASE=test-passphrase-123
     volumes:
@@ -21,6 +22,11 @@ services:
     stdin_open: true
     tty: true
     restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 1G
 
   anvil:
     image: ghcr.io/foundry-rs/foundry:latest
@@ -52,6 +58,11 @@ services:
         condition: service_started
     stdin_open: true
     tty: true
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 1G
     profiles:
       - demo
 

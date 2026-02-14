@@ -29,6 +29,9 @@ const CREATE_RATE_LIMIT_TABLE_SQL = `
 const CREATE_RATE_LIMIT_INDEX_SQL =
   "CREATE INDEX IF NOT EXISTS idx_rate_wallet_ts ON rate_limit_events(wallet_address, timestamp);";
 
+const ADDRESS_RE = /^0x[0-9a-fA-F]{40}$/;
+const MAX_RECENT_EVENTS_LIMIT = 1000;
+
 interface AuditRow {
   id: string;
   timestamp: number;
@@ -41,8 +44,10 @@ export class AuditTraceService {
   public readonly db: Database.Database;
   private insertStmt: Database.Statement;
   private selectByIntentStmt: Database.Statement;
+  private selectRecentStmt: Database.Statement;
   private rateLimitInsertStmt: Database.Statement;
   private rateLimitCountStmt: Database.Statement;
+  private rateLimitCleanupStmt: Database.Statement;
 
   constructor(dbPath: string) {
     this.db = new Database(dbPath);
@@ -59,11 +64,17 @@ export class AuditTraceService {
     this.selectByIntentStmt = this.db.prepare(
       "SELECT * FROM audit_events WHERE intent_id = ? ORDER BY timestamp ASC",
     );
+    this.selectRecentStmt = this.db.prepare(
+      "SELECT * FROM audit_events ORDER BY timestamp DESC LIMIT ?",
+    );
     this.rateLimitInsertStmt = this.db.prepare(
       "INSERT INTO rate_limit_events (wallet_address, timestamp) VALUES (?, ?)",
     );
     this.rateLimitCountStmt = this.db.prepare(
       "SELECT COUNT(*) AS count FROM rate_limit_events WHERE wallet_address = ? AND timestamp > ?",
+    );
+    this.rateLimitCleanupStmt = this.db.prepare(
+      "DELETE FROM rate_limit_events WHERE timestamp <= ?",
     );
   }
 
@@ -84,7 +95,22 @@ export class AuditTraceService {
     }));
   }
 
+  getRecentEvents(limit: number = 20): AuditEvent[] {
+    const effectiveLimit = Math.min(Math.max(1, limit), MAX_RECENT_EVENTS_LIMIT);
+    const rows = this.selectRecentStmt.all(effectiveLimit) as AuditRow[];
+    return rows.map((row) => ({
+      id: row.id,
+      timestamp: row.timestamp,
+      intentId: row.intent_id,
+      event: row.event,
+      data: JSON.parse(row.data) as Record<string, unknown>,
+    }));
+  }
+
   recordRateLimitTick(walletAddress: string): void {
+    if (!ADDRESS_RE.test(walletAddress)) {
+      throw new Error(`Invalid wallet address: ${walletAddress}`);
+    }
     this.rateLimitInsertStmt.run(walletAddress, Date.now());
   }
 
@@ -92,6 +118,12 @@ export class AuditTraceService {
     const since = Date.now() - windowMs;
     const row = this.rateLimitCountStmt.get(walletAddress, since) as { count: number };
     return row.count;
+  }
+
+  cleanupRateLimitEvents(windowMs: number): number {
+    const cutoff = Date.now() - windowMs;
+    const result = this.rateLimitCleanupStmt.run(cutoff);
+    return result.changes;
   }
 
   close(): void {

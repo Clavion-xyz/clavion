@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildApp } from "@clavion/core";
+import { mockRpcClient as baseMockRpc } from "../../../tools/fixtures/index.js";
 import type { FastifyInstance } from "fastify";
 import type { RpcClient, TransactionReceipt } from "@clavion/types/rpc";
 
@@ -20,18 +21,11 @@ const MOCK_RECEIPT: TransactionReceipt = {
 };
 
 function mockRpcClient(overrides?: Partial<RpcClient>): RpcClient {
-  return {
-    call: async () => ({ success: true, returnData: "0x" as `0x${string}` }),
-    estimateGas: async () => 50_000n,
+  return baseMockRpc({
     readBalance: async () => 0n,
-    readNativeBalance: async () => 0n,
-    readAllowance: async () => 0n,
     getTransactionReceipt: async () => MOCK_RECEIPT,
-    sendRawTransaction: async () => "0x" as `0x${string}`,
-    getTransactionCount: async () => 0,
-    estimateFeesPerGas: async () => ({ maxFeePerGas: 1_000_000_000n, maxPriorityFeePerGas: 1_000_000_000n }),
     ...overrides,
-  };
+  });
 }
 
 describe("GET /v1/tx/:hash — receipt lookup", () => {

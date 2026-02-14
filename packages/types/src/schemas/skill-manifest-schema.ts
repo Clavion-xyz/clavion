@@ -41,7 +41,7 @@ export const SkillManifestSchema = {
           type: "array",
           items: {
             type: "string",
-            enum: ["transfer", "approve", "swap_exact_in", "swap_exact_out"],
+            enum: ["transfer", "transfer_native", "approve", "swap_exact_in", "swap_exact_out"],
           },
           uniqueItems: true,
         },

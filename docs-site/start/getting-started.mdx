@@ -1,0 +1,329 @@
+---
+title: Repository structure
+description: Navigate the Clavion monorepo — every package, file, and trust domain mapped.
+icon: folder-tree
+---
+
+Clavion is organized as an npm workspaces monorepo. Each package maps to one of the three architectural trust domains. This page is a comprehensive map of the entire codebase.
+
+## Top-Level Layout
+
+```
+packages/              -- All packages (see below)
+tests/                 -- Cross-package integration, security, and e2e tests
+tools/                 -- Fixture generation, hash utilities
+examples/              -- Example scripts and policy configs
+docs/                  -- Architecture docs, API reference, guides
+docker/                -- Dockerfile and Docker Compose configuration
+scripts/               -- Demo scripts (demo-transfer.ts, demo-swap.ts)
+openclaw-skills/       -- OpenClaw skill packages (SKILL.md + runner scripts)
+```
+
+Every component belongs to exactly one trust domain. The tabs below walk through every package, file, and its role.
+
+<Tabs>
+  <Tab title="Domain B -- Trusted">
+
+    <Note>
+      **Domain B** is the trusted core. Private keys, policy evaluation, signing, audit logging, and
+      RPC access all live here. No adapter or agent code runs in this domain. This is the only place
+      where private keys exist and transactions are signed.
+    </Note>
+
+    ### packages/types -- `@clavion/types`
+
+    Shared TypeScript interfaces and JSON Schemas used across all packages.
+
+    ```
+    packages/types/
+      src/
+        index.ts                             -- Shared TypeScript interfaces (TxIntent, BuildPlan, etc.)
+        intent-utils.ts                      -- Intent helper utilities
+        schemas/
+          txintent-schema.ts                 -- TxIntent v1 JSON Schema (AJV strict mode)
+          skill-manifest-schema.ts           -- SkillManifest v1 JSON Schema
+    ```
+
+    ### packages/audit -- `@clavion/audit`
+
+    Append-only audit trail backed by SQLite. Every fund-affecting operation is logged and correlated
+    by `intentId`.
+
+    ```
+    packages/audit/
+      src/
+        audit-trace-service.ts               -- Append-only SQLite event log, rate limit tracking
+    ```
+
+    ### packages/policy -- `@clavion/policy`
+
+    Policy engine that evaluates each TxIntent and returns `allow`, `deny`, or `require_approval`.
+
+    ```
+    packages/policy/
+      src/
+        policy-engine.ts                     -- Intent evaluation: allow / deny / require_approval
+        policy-config.ts                     -- Config schema and loader
+    ```
+
+    ### packages/signer -- `@clavion/signer`
+
+    Encrypted keystore and signing pipeline. Keys are encrypted at rest with scrypt + AES-256-GCM.
+
+    ```
+    packages/signer/
+      src/
+        keystore.ts                          -- EncryptedKeystore (scrypt + AES-256-GCM)
+        wallet-service.ts                    -- Signing pipeline
+        mnemonic.ts                          -- BIP-39 mnemonic import with HD derivation
+    ```
+
+    ### packages/preflight -- `@clavion/preflight`
+
+    Simulates transactions via `eth_call` and scores risk before approval.
+
+    ```
+    packages/preflight/
+      src/
+        preflight-service.ts                 -- eth_call simulation + risk scoring
+        risk-scorer.ts                       -- 7 additive rules, capped at 100
+    ```
+
+    ### packages/registry -- `@clavion/registry`
+
+    Skill manifest validation, signing, and registry. Ensures only verified skills can interact with
+    the system.
+
+    ```
+    packages/registry/
+      src/
+        skill-registry-service.ts            -- Orchestrates skill registration pipeline
+        manifest-signer.ts                   -- ECDSA sign/verify (viem)
+        file-hasher.ts                       -- SHA-256 file integrity
+        static-scanner.ts                    -- 5 rule categories for code analysis
+    ```
+
+    ### packages/core -- `@clavion/core`
+
+    The main API server, transaction builders, approval flow, multi-chain RPC routing, and the 1inch
+    DEX aggregator integration.
+
+    ```
+    packages/core/
+      src/
+        main.ts                              -- Production entry point
+        demo-boot.ts                         -- Demo mode: auto-unlock + auto-approve
+        index.ts                             -- Public re-exports
+        api/
+          app.ts                             -- Fastify app builder and service wiring
+          routes/
+            health.ts                        -- GET /v1/health
+            tx.ts                            -- POST /v1/tx/* (build, preflight, approve-request, sign-and-send)
+            balance.ts                       -- GET /v1/balance/:token/:account
+            skills.ts                        -- Skill registry CRUD routes
+            approval-ui.ts                   -- Web approval routes + inline HTML dashboard
+        tx/builders/
+          index.ts                           -- Action type -> builder dispatcher (async)
+          transfer-builder.ts                -- ERC-20 transfer calldata
+          transfer-native-builder.ts         -- Native ETH transfer
+          approve-builder.ts                 -- ERC-20 approve calldata
+          swap-builder.ts                    -- UniswapV3 SwapRouter02 calldata
+          swap-oneinch-builder.ts            -- 1inch Swap API v6 calldata
+          build-utils.ts                     -- Shared: txRequest hashing
+        aggregator/
+          oneinch-client.ts                  -- 1inch HTTP client (fetch + AbortController)
+          oneinch-types.ts                   -- 1inch API request/response types
+          oneinch-routers.ts                 -- Known 1inch router addresses per chain
+        approval/
+          approval-service.ts                -- User confirmation prompt (CLI or web)
+          approval-token-manager.ts          -- Single-use TTL tokens
+          pending-approval-store.ts          -- In-memory store bridging web UI to blocking promptFn
+        rpc/
+          rpc-router.ts                      -- Multi-chain RPC routing
+          resolve-rpc.ts                     -- Chain-scoped RPC resolution
+          parse-rpc-env.ts                   -- ISCL_RPC_URL_{chainId} env parser
+          build-rpc-client.ts                -- RPC client factory
+          viem-rpc-client.ts                 -- Viem-based RPC implementation
+        canonicalize/
+          intent-hash.ts                     -- JCS + keccak256
+        schemas/
+          validator.ts                       -- AJV strict-mode validator
+    ```
+
+  </Tab>
+  <Tab title="Domain A -- Untrusted">
+
+    <Note>
+      **Domain A** is untrusted. Adapters construct `TxIntent` objects and communicate with ISCL Core
+      over localhost HTTP. They have **no keys**, **no signing capability**, and **no direct blockchain
+      access**. A compromised adapter cannot steal funds.
+    </Note>
+
+    ### packages/adapter-openclaw -- `@clavion/adapter-openclaw`
+
+    Thin skill wrappers that translate OpenClaw tool calls into ISCL TxIntents.
+
+    ```
+    packages/adapter-openclaw/
+      src/
+        shared/
+          iscl-client.ts                     -- HTTP client for ISCL Core
+        skills/
+          intent-builder.ts                  -- TxIntent constructor with safe defaults
+          types.ts                           -- Adapter-side type definitions
+          clavion-transfer/                  -- ERC-20 transfer skill wrapper
+          clavion-transfer-native/           -- Native ETH transfer skill wrapper
+          clavion-approve/                   -- ERC-20 approve skill wrapper
+          clavion-swap/                      -- Swap skill wrapper
+          clavion-balance/                   -- Balance lookup skill wrapper
+        openclaw-agent.ts                    -- OpenClaw-compatible tool registry + executor
+    ```
+
+    ### packages/adapter-mcp -- `@clavion/adapter-mcp`
+
+    Model Context Protocol server exposing 6 tools for Claude Desktop, Cursor, and other MCP-capable
+    IDEs.
+
+    ```
+    packages/adapter-mcp/
+      src/
+        server.ts                            -- MCP server setup (6 tools)
+        shared/
+          iscl-client.ts                     -- HTTP client for ISCL Core
+        tools/
+          schemas.ts                         -- Zod schemas for MCP tool parameters
+          transfer.ts                        -- clavion_transfer tool handler
+          transfer-native.ts                 -- clavion_transfer_native tool handler
+          approve.ts                         -- clavion_approve tool handler
+          swap.ts                            -- clavion_swap tool handler
+          balance.ts                         -- clavion_balance tool handler
+          tx-status.ts                       -- clavion_tx_status tool handler
+    ```
+
+    ### packages/plugin-eliza -- `@clavion/plugin-eliza`
+
+    ElizaOS (ai16z) plugin with 5 actions, a service layer, a wallet context provider, and LLM
+    extraction templates.
+
+    ```
+    packages/plugin-eliza/
+      src/
+        index.ts                             -- ElizaOS plugin definition (5 actions + service + provider)
+        service.ts                           -- ClavionService (ISCLClient lifecycle)
+        provider.ts                          -- Wallet context provider for LLM
+        templates.ts                         -- LLM extraction templates for each action
+        actions/
+          transfer.ts                        -- CLAVION_TRANSFER action
+          transfer-native.ts                 -- CLAVION_TRANSFER_NATIVE action
+          approve.ts                         -- CLAVION_APPROVE action
+          swap.ts                            -- CLAVION_SWAP action
+          balance.ts                         -- CLAVION_BALANCE action
+        shared/
+          iscl-client.ts                     -- HTTP client for ISCL Core
+          intent-builder.ts                  -- TxIntent construction helpers
+          pipeline.ts                        -- Shared secure pipeline (build -> approve -> sign)
+    ```
+
+    ### packages/adapter-telegram -- `@clavion/adapter-telegram`
+
+    grammY-based Telegram bot with 7 commands, inline approval via InlineKeyboard, chat allowlisting,
+    and HTML message formatting.
+
+    ```
+    packages/adapter-telegram/
+      src/
+        bot.ts                               -- grammY bot setup with 7 commands
+        config.ts                            -- TelegramAdapterConfig (env vars)
+        main.ts                              -- Entry point
+        shared/
+          iscl-client.ts                     -- HTTP client for ISCL Core
+        commands/
+          start.ts                           -- /start and /help
+          transfer.ts                        -- /transfer command
+          send.ts                            -- /send (alias for transfer)
+          swap.ts                            -- /swap command
+          approve-token.ts                   -- /approve command
+          balance.ts                         -- /balance command
+          status.ts                          -- /status (health check)
+        approval/
+          approval-flow.ts                   -- ActiveTransactionStore, approval polling
+          formatters.ts                      -- HTML message formatters
+        middleware/
+          auth.ts                            -- Chat allowlist + sender verification
+    ```
+
+  </Tab>
+  <Tab title="Domain C -- Limited Trust">
+
+    <Note>
+      **Domain C** runs untrusted skill code inside Docker containers with no network access, a
+      read-only filesystem, and no Linux capabilities. It communicates with Domain B exclusively
+      via the ISCL Core HTTP API. It has **no key access**.
+    </Note>
+
+    ### packages/sandbox -- `@clavion/sandbox`
+
+    ```
+    packages/sandbox/
+      src/
+        sandbox-runner.ts                    -- Docker-based skill executor
+      docker/
+        seccomp-no-spawn.json                -- Syscall filter profile
+    ```
+
+  </Tab>
+</Tabs>
+
+## CLI and SDK
+
+The CLI provides key management commands. The SDK is a planned interface stub for v0.2.
+
+```
+packages/cli/                            @clavion/cli
+  src/
+    main.ts                              -- Entry point (clavion-cli)
+    commands/
+      key.ts                             -- Key management: import, import-mnemonic, generate, list
+    io.ts                                -- Masked passphrase input, injectable I/O
+
+packages/sdk/                            @clavion/sdk
+  src/
+    index.ts                             -- SDK interface (stub, v0.2)
+```
+
+## Fixtures and Tools
+
+Test fixtures live in `tools/fixtures/`. One valid fixture exists per action type, plus invalid and
+edge-case variants.
+
+```
+tools/fixtures/
+  valid-intents.ts                       -- Valid TxIntent per action type (6 fixtures)
+  invalid-intents.ts                     -- Edge cases and malformed intents
+  skill-manifests.ts                     -- Skill manifest examples
+  hash-fixtures.ts                       -- Expected keccak256 hashes
+  generate-hashes.ts                     -- Regenerate hash fixtures
+  index.ts                               -- Re-exports all fixtures
+  mock-rpc.ts                            -- Mock RPC factory for tests
+  test-keys.ts                           -- Test key material
+  test-policy.ts                         -- Test policy configurations
+```
+
+## Tests
+
+```
+tests/
+  integration/                           -- HTTP API, adapter client, skill wrappers, rate limiting
+  security/                              -- Trust domain isolation, sandbox escape, tampered packages
+  e2e/                                   -- Anvil fork: full build -> sign -> broadcast flow
+  helpers/                               -- Anvil fork management, Docker availability check
+packages/*/test/                         -- Per-package unit tests
+```
+
+## Docker
+
+```
+docker/
+  Dockerfile.core                        -- Multi-stage build: Node 20 Alpine, non-root iscl user
+  compose.yaml                           -- 3-service stack: Anvil, ISCL Core, OpenClaw (demo profile)
+```

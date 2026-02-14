@@ -62,7 +62,7 @@ export function getDefaultConfig(): PolicyConfig {
     maxApprovalAmount: "0",
     contractAllowlist: [],
     tokenAllowlist: [],
-    allowedChains: [8453],
+    allowedChains: [1, 10, 42161, 8453],
     recipientAllowlist: [],
     maxRiskScore: 50,
     requireApprovalAbove: { valueWei: "0" },
@@ -91,5 +91,31 @@ export function loadPolicyConfig(path: string): PolicyConfig {
     throw new Error(`Invalid policy config: ${errors}`);
   }
 
-  return data as PolicyConfig;
+  const config = data as PolicyConfig;
+  validatePolicyConfigValues(config);
+  return config;
+}
+
+/**
+ * Cross-field validation for PolicyConfig values.
+ * Provides defense-in-depth beyond JSON Schema structural checks.
+ */
+function validatePolicyConfigValues(config: PolicyConfig): void {
+  if (config.maxRiskScore < 0 || config.maxRiskScore > 100) {
+    throw new Error(
+      `Invalid policy config: maxRiskScore must be in [0, 100], got ${config.maxRiskScore}`,
+    );
+  }
+  if (config.maxTxPerHour < 1) {
+    throw new Error(
+      `Invalid policy config: maxTxPerHour must be >= 1, got ${config.maxTxPerHour}`,
+    );
+  }
+  for (const chainId of config.allowedChains) {
+    if (!Number.isInteger(chainId) || chainId < 1) {
+      throw new Error(
+        `Invalid policy config: allowedChains must contain positive integers, got ${chainId}`,
+      );
+    }
+  }
 }

@@ -45,19 +45,20 @@ export class WalletService {
         throw new Error("ApprovalToken is required when policy decision is require_approval");
       }
 
-      const isValid = this.approvalTokenManager.validate(
+      const tokenCheck = this.approvalTokenManager.validate(
         approvalToken.id,
         intentId,
         txRequestHash,
       );
 
-      if (!isValid) {
+      if (!tokenCheck.valid) {
         this.auditTrace.log("signing_denied", {
           intentId,
           reason: "invalid_approval_token",
+          tokenReason: tokenCheck.reason,
           tokenId: approvalToken.id,
         });
-        throw new Error("ApprovalToken is invalid, expired, or already consumed");
+        throw new Error(`ApprovalToken rejected: ${tokenCheck.reason ?? "unknown"}`);
       }
 
       // Consume token — single use

@@ -1,0 +1,316 @@
+# Observability Guide
+
+## Overview
+
+This guide covers monitoring and observing a running ISCL Core instance. ISCL produces structured JSON logs via pino (Fastify's built-in logger), exposes a health endpoint for liveness probes, and writes an append-only audit trail in SQLite that doubles as a source of operational metrics. Together, these three signals give ops engineers full visibility into the transaction pipeline without requiring additional instrumentation.
+
+## Structured Logging (pino)
+
+Fastify uses [pino](https://github.com/pinojs/pino) for structured JSON logging. Every log line is a self-contained JSON object written to stdout.
+
+The logger is configured in `packages/core/src/api/app.ts`:
+
+```typescript
+const app = Fastify({
+  logger: options.logger !== false ? { level: "info" } : false,
+});
+```
+
+When the server starts via `packages/core/src/main.ts`, `logger: true` is always passed, so production instances emit info-level logs by default.
+
+### Log Format
+
+Every log entry includes these standard pino fields:
+
+| Field      | Type   | Description                                |
+|------------|--------|--------------------------------------------|
+| `level`    | number | Numeric log level (see table below)        |
+| `time`     | number | Unix timestamp in milliseconds             |
+| `pid`      | number | Process ID                                 |
+| `hostname` | string | Machine hostname                           |
+| `reqId`    | string | Unique per-request correlation ID          |
+| `msg`      | string | Human-readable message                     |
+
+Fastify automatically logs every HTTP request and response, attaching the `reqId` to both entries for correlation.
+
+### Example Log Output
+
+```json
+{"level":30,"time":1707580800000,"pid":1234,"hostname":"iscl-core","reqId":"req-1","msg":"incoming request","req":{"method":"POST","url":"/v1/tx/build"}}
+{"level":30,"time":1707580800050,"pid":1234,"hostname":"iscl-core","reqId":"req-1","msg":"request completed","res":{"statusCode":200},"responseTime":50}
+```
+
+A fatal startup failure (e.g., port already in use) logs at level 60:
+
+```json
+{"level":60,"time":1707580800000,"pid":1234,"hostname":"iscl-core","msg":"Failed to start ISCL Core","err":{"message":"listen EADDRINUSE: address already in use 127.0.0.1:3100"}}
+```
+
+### Log Levels
+
+| Level | Value | When Used                                            |
+|-------|-------|------------------------------------------------------|
+| fatal | 60    | Server cannot start (port conflict, missing config)  |
+| error | 50    | Unhandled errors, broadcast failures                 |
+| warn  | 40    | Policy denials, high risk scores                     |
+| info  | 30    | Request lifecycle, audit events (default level)      |
+| debug | 20    | Builder details, RPC calls, schema validation        |
+| trace | 10    | Full request/response bodies                         |
+
+### Configuring Log Level
+
+- `buildApp({ logger: true })` -- info level (default in production)
+- `buildApp({ logger: false })` -- disabled (used in test suites)
+- Future: `ISCL_LOG_LEVEL` env var support is planned for v0.2+
+
+To temporarily lower the level for debugging in a non-production environment, modify the Fastify constructor call in `app.ts`:
+
+```typescript
+logger: { level: process.env.ISCL_LOG_LEVEL ?? "info" }
+```
+
+### Request Correlation
+
+Every inbound HTTP request receives a unique `reqId` (e.g., `req-1`, `req-2`). Use this value to correlate the request log with its response log, any intermediate error logs, and downstream RPC calls. When troubleshooting a failed transaction, search your log aggregator for the `reqId` to see the full request lifecycle.
+
+## Health Monitoring
+
+### Health Endpoint
+
+`GET /v1/health` returns the current server status:
+
+```json
+{
+  "status": "ok",
+  "version": "0.1.0",
+  "uptime": 3600.123
+}
+```
+
+| Field     | Type   | Description                                 |
+|-----------|--------|---------------------------------------------|
+| `status`  | string | Always `"ok"` when the server is responsive |
+| `version` | string | ISCL Core version                           |
+| `uptime`  | number | Seconds since process start (`process.uptime()`) |
+
+The response schema enforces `additionalProperties: false`, so these are the only fields returned. A `200` response with `status: "ok"` confirms the Fastify server and its registered routes are operational.
+
+Additionally, every response includes an `X-ISCL-Version` header (currently `0.1.0`) that external monitors can check without parsing the body.
+
+### Monitoring Pattern
+
+- Poll `GET /v1/health` every 30 seconds from your monitoring system.
+- Alert if: response takes longer than 5 seconds, status is not `"ok"`, or 3+ consecutive failures occur.
+- For Docker deployments, add a container-level healthcheck:
+
+```yaml
+services:
+  iscl-core:
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3100/v1/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+```
+
+### Environment Variables
+
+The server binds to a configurable host and port (from `packages/core/src/main.ts`):
+
+| Variable    | Default       | Description              |
+|-------------|---------------|--------------------------|
+| `ISCL_PORT` | `3100`        | HTTP listen port         |
+| `ISCL_HOST` | `127.0.0.1`   | Bind address             |
+
+Ensure your health checks target the correct host and port.
+
+## Audit Events as Observability
+
+The SQLite audit trail (`@clavion/audit`) records every significant step in the transaction pipeline. These 14 event types serve double duty as observability signals.
+
+### Event Catalog
+
+| Event                       | Source                | Signal                          |
+|-----------------------------|-----------------------|---------------------------------|
+| `policy_evaluated`          | `/v1/tx/build`        | Policy decision (allow/deny/require_approval) |
+| `tx_built`                  | `/v1/tx/build`        | Successful transaction build    |
+| `preflight_completed`       | `/v1/tx/preflight`    | Simulation result + risk score  |
+| `approve_request_created`   | `/v1/tx/approve-request` | Approval flow initiated      |
+| `approval_granted`          | `ApprovalService`     | User approved transaction       |
+| `approval_rejected`         | `ApprovalService`     | User declined transaction       |
+| `web_approval_decided`      | Approval UI routes    | Web UI approval decision        |
+| `signature_created`         | `WalletService`       | Key signed transaction          |
+| `signing_denied`            | `WalletService`       | Signing blocked (policy/token)  |
+| `tx_broadcast`              | `/v1/tx/sign-and-send`| Successful RPC broadcast        |
+| `broadcast_failed`          | `/v1/tx/sign-and-send`| Broadcast error                 |
+| `skill_registered`          | `/v1/skills/register` | New skill registered            |
+| `skill_registration_failed` | `/v1/skills/register` | Skill registration rejected     |
+| `skill_revoked`             | `DELETE /v1/skills/:name` | Skill revoked                |
+
+### Alert-Worthy Conditions
+
+| Event                  | Condition                          | Meaning                         |
+|------------------------|------------------------------------|---------------------------------|
+| `policy_evaluated`     | `decision: "deny"` rate spikes     | Possible misconfiguration or attack |
+| `broadcast_failed`     | Any occurrence                     | RPC node issue or gas problem   |
+| `signing_denied`       | Any occurrence                     | Unauthorized signing attempt    |
+| `approval_rejected`    | High rate                          | Users rejecting agent-proposed txs |
+| `sandbox_error`        | Any occurrence                     | Sandbox execution failure       |
+
+### Querying Audit Events
+
+Audit events are stored in SQLite with WAL mode enabled for concurrent read access. Query them directly for ad-hoc investigation:
+
+```bash
+sqlite3 iscl-audit.sqlite "SELECT event, json_extract(data, '$.intentId'), datetime(timestamp/1000, 'unixepoch') FROM audit_events ORDER BY timestamp DESC LIMIT 20;"
+```
+
+The `AuditTraceService.getRecentEvents(limit)` method returns the most recent events (default 20, max 100), also available via `GET /v1/approvals/history?limit=N`.
+
+For full documentation of audit event schemas, see the [Audit Trail Guide](audit-trail.md).
+
+## Key Metrics
+
+Derive these operational metrics from audit events and HTTP responses:
+
+| Metric              | Derivation                                                  | Alert Threshold              |
+|---------------------|-------------------------------------------------------------|------------------------------|
+| **Throughput**      | Count of `tx_broadcast` events per hour                     | Baseline-dependent           |
+| **Error rate**      | `broadcast_failed` / (`tx_broadcast` + `broadcast_failed`)  | > 10%                        |
+| **Denial rate**     | `policy_evaluated` with `deny` / total evaluations          | Spike detection              |
+| **Approval latency**| Time between `approve_request_created` and `approval_granted` or `approval_rejected` | > 300s (TTL expiry) |
+| **RPC health**      | HTTP 502 responses from `/v1/balance` or `/v1/tx/preflight` | Any occurrence               |
+| **Rate limit hits** | Rate limit denials per wallet per hour                      | Policy-dependent             |
+| **Signing denials** | Count of `signing_denied` events                            | Any occurrence               |
+
+### Deriving Metrics from SQLite
+
+Example: broadcast error rate over the last hour:
+
+```sql
+SELECT
+  ROUND(
+    100.0 * SUM(CASE WHEN event = 'broadcast_failed' THEN 1 ELSE 0 END)
+    / COUNT(*),
+    2
+  ) AS error_rate_pct
+FROM audit_events
+WHERE event IN ('tx_broadcast', 'broadcast_failed')
+  AND timestamp > (strftime('%s', 'now') * 1000 - 3600000);
+```
+
+Example: approval latency (average seconds):
+
+```sql
+SELECT AVG(g.timestamp - r.timestamp) / 1000.0 AS avg_approval_seconds
+FROM audit_events r
+JOIN audit_events g ON r.intent_id = g.intent_id
+WHERE r.event = 'approve_request_created'
+  AND g.event IN ('approval_granted', 'approval_rejected');
+```
+
+## Log Forwarding
+
+ISCL produces newline-delimited JSON (ndjson) on stdout. This format is natively supported by all major log aggregation systems.
+
+### ELK Stack (Elasticsearch, Logstash, Kibana)
+
+Use Filebeat to ship container logs:
+
+```yaml
+# filebeat.yml
+filebeat.inputs:
+  - type: container
+    paths:
+      - /var/lib/docker/containers/*/*.log
+    processors:
+      - decode_json_fields:
+          fields: ["message"]
+          target: "iscl"
+output.elasticsearch:
+  hosts: ["http://elasticsearch:9200"]
+  index: "iscl-core-%{+yyyy.MM.dd}"
+```
+
+### Loki (Grafana)
+
+Use Promtail to forward Docker logs to Loki:
+
+```yaml
+# promtail.yml
+scrape_configs:
+  - job_name: iscl-core
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+    relabel_configs:
+      - source_labels: ['__meta_docker_container_name']
+        regex: '/iscl-core'
+        action: keep
+    pipeline_stages:
+      - json:
+          expressions:
+            level: level
+            msg: msg
+            reqId: reqId
+```
+
+### AWS CloudWatch
+
+Use the CloudWatch Logs agent or configure the `awslogs` Docker log driver:
+
+```yaml
+services:
+  iscl-core:
+    logging:
+      driver: awslogs
+      options:
+        awslogs-group: /iscl/core
+        awslogs-region: us-east-1
+        awslogs-stream-prefix: iscl
+```
+
+### Direct File Output
+
+For simple setups, redirect stdout to a file with log rotation:
+
+```bash
+node packages/core/dist/main.js >> /var/log/iscl/core.log 2>&1
+```
+
+Combine with `logrotate` for production use:
+
+```
+/var/log/iscl/core.log {
+    daily
+    rotate 14
+    compress
+    missingok
+    notifempty
+    copytruncate
+}
+```
+
+### Pretty-Printing for Development
+
+Use `pino-pretty` for human-readable output during development:
+
+```bash
+node packages/core/dist/main.js | npx pino-pretty
+```
+
+## Future: Prometheus and OpenTelemetry
+
+Planned for v0.2+:
+
+- **Prometheus `/metrics` endpoint** -- histograms for request latency by route, counters for transaction types (transfer, swap, approve), gauges for pending approvals.
+- **OpenTelemetry trace spans** -- spans across the full tx pipeline (build, preflight, approve, sign, broadcast) with `intentId` as the correlation ID.
+- **Distributed tracing** -- propagate trace context from adapter (Domain A) through ISCL Core (Domain B) to RPC nodes, enabling end-to-end latency analysis.
+- **Alertmanager integration** -- fire alerts based on Prometheus rules for broadcast failures, signing denials, and approval TTL expiry.
+
+## Cross-References
+
+- [Audit Trail Guide](audit-trail.md) -- full event catalog and retention policies
+- [Deployment Guide](deployment.md) -- Docker and environment configuration
+- [Configuration Reference](../configuration.md) -- all environment variables
+- [Multi-Chain Operations](multi-chain.md) -- chain-specific RPC monitoring

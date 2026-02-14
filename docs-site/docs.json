@@ -1,0 +1,136 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "name": "Clavion",
+  "logo": {
+    "light": "/logo/light.svg",
+    "dark": "/logo/dark.svg"
+  },
+  "favicon": "/favicon.svg",
+  "theme": "mint",
+  "colors": {
+    "primary": "#6366F1",
+    "light": "#818CF8",
+    "dark": "#4F46E5"
+  },
+  "topbarLinks": [
+    {
+      "name": "GitHub",
+      "url": "https://github.com/clavion/clavion"
+    }
+  ],
+  "topbarCtaButton": {
+    "type": "github",
+    "url": "https://github.com/clavion/clavion"
+  },
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Start",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              "start/index",
+              "start/getting-started",
+              "start/installation",
+              "start/quickstart",
+              "start/cli",
+              "start/demo-flow",
+              "start/use-cases"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Concepts",
+        "groups": [
+          {
+            "group": "Architecture",
+            "pages": [
+              "concepts/index",
+              "concepts/architecture",
+              "concepts/trust-domains",
+              "concepts/transaction-lifecycle",
+              "concepts/policy-engine",
+              "concepts/approval-model"
+            ]
+          },
+          {
+            "group": "Security & Design",
+            "pages": [
+              "concepts/risk-scoring",
+              "concepts/threat-analysis",
+              "concepts/adrs",
+              "concepts/glossary"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Reference",
+        "groups": [
+          {
+            "group": "API & Schemas",
+            "pages": [
+              "reference/index",
+              "reference/rest-api",
+              "reference/api-cookbook",
+              "reference/txintent-schema",
+              "reference/skillmanifest-schema",
+              "reference/config-reference",
+              "reference/error-codes",
+              "reference/changelog"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Guides",
+        "groups": [
+          {
+            "group": "Walkthroughs",
+            "pages": [
+              "guides/index",
+              "guides/integrating-openclaw",
+              "guides/building-agents",
+              "guides/mcp-setup",
+              "guides/eliza-setup",
+              "guides/telegram-setup",
+              "guides/custom-adapter",
+              "guides/sandbox-security",
+              "guides/production-deployment"
+            ]
+          },
+          {
+            "group": "Advanced",
+            "pages": [
+              "guides/multi-chain",
+              "guides/skill-registry",
+              "guides/testing",
+              "guides/contributing"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Operations",
+        "groups": [
+          {
+            "group": "Running in Production",
+            "pages": [
+              "operations/index",
+              "operations/audit-trail",
+              "operations/observability",
+              "operations/incident-runbook",
+              "operations/performance-tuning",
+              "operations/migration"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "footerSocials": {
+    "github": "https://github.com/clavion/clavion"
+  }
+}

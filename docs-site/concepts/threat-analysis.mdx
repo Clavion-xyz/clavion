@@ -1,0 +1,148 @@
+---
+title: Threat Analysis
+description: ISCL security analysis against modern crypto attacker models
+icon: shield-halved
+---
+
+## Overview
+
+This analysis evaluates ISCL's resilience against attack vectors from Mahimna Kelkar's a16z crypto research seminar on novel attacker models, TEE-based encumbrance attacks, and smart contract collusion.
+
+<Note>
+**Source:** a16z Crypto Research Seminar -- "Rethinking Crypto Attacker Models" by Mahimna Kelkar (PhD, Cornell, advised by Ari Juels)
+</Note>
+
+The research identifies five categories of threats to crypto systems. Below we assess how each applies to ISCL's architecture and what defenses are in place.
+
+## Threat categories
+
+<AccordionGroup>
+
+<Accordion title="1. Encumbrance Attacks (TEE-based key splitting)">
+
+**The threat:** A user locks their private key inside a TEE (e.g., Intel SGX) and splits access -- keeping some capabilities (spending) while selling/renting others (voting, reputation). This breaks the "one key = one owner" assumption that many protocols rely on.
+
+**ISCL's exposure: Low / Not directly applicable**
+
+ISCL's threat model is fundamentally different from the protocols Kelkar attacks. His targets are *multi-party protocols* (DAOs, voting, soulbound tokens) that assume a key represents a single autonomous human. ISCL is a *local single-user runtime* whose threat model is:
+
+> "Protect the user's keys FROM the AI agent, not from the user themselves."
+
+| Kelkar's assumption violated | ISCL's stance |
+|---|---|
+| One key = one owner | ISCL does not care who "owns" the key -- it just enforces policy before signing |
+| User has full key access | ISCL *requires* the user to have full access (passphrase to unlock) |
+| User will not split key functionality | Not relevant -- ISCL is the user's own tool, not a multi-party protocol |
+
+**Where it could matter:** If someone deployed ISCL inside a TEE and sold partial signing access (e.g., "sign any transfer < 0.1 ETH"), they would be using ISCL as a tool *within* an encumbrance scheme. But this is not an attack *on* ISCL -- it is an attack on whatever protocol trusts the resulting signatures. ISCL's PolicyEngine would still enforce its rules regardless of who triggers the signing.
+
+<Tip>
+ISCL's security does not depend on the "single entity ownership" assumption that encumbrance attacks violate. The trust model is: *user is trusted, AI agent is not*.
+</Tip>
+
+</Accordion>
+
+<Accordion title="2. Smart Contract-Based Collusion">
+
+**The threat:** Colluders deploy a smart contract as a commitment device -- depositing funds that get burned if anyone whistleblows. This defeats accountability/whistleblowing mechanisms by making defection financially irrational.
+
+**ISCL's exposure: Not applicable**
+
+ISCL is not a multi-party protocol with honesty quorums. There are no:
+- Threshold signatures requiring t-of-n honest parties
+- Whistleblowing mechanisms
+- Collusion-resistant voting
+- Distributed key generation ceremonies
+
+ISCL's architecture is explicitly *centralized* at the user level -- one user, one keystore, one policy engine. The "collusion" threat in ISCL is between a malicious skill (Domain A) and a compromised component (e.g., RPC endpoint), which is handled with defense-in-depth, not game-theoretic incentives.
+
+</Accordion>
+
+<Accordion title="3. AI Bot Armies">
+
+**The threat:** "What happens when AI bots are indistinguishable from humans? Can you generate an army of AI bots to extract more value from a system than you should have?"
+
+**ISCL's exposure: Moderate -- but well-defended**
+
+This is actually ISCL's *core design scenario* -- an AI agent trying to perform crypto operations. The defenses:
+
+| Defense | How it helps |
+|---|---|
+| **Human-in-the-loop approval** | Every fund-affecting tx requires explicit user confirmation via CLI/web/Telegram |
+| **Rate limiting** | `maxTxPerHour` policy cap prevents rapid-fire operations |
+| **Value caps** | `maxValueWei`, `maxApprovalAmount` bound maximum damage |
+| **Allowlists** | Token, contract, recipient, and chain allowlists restrict scope |
+| **Single-use approval tokens** | 5-min TTL, consumed on use -- no replay |
+| **Canonical approval summary** | User sees Core-generated data, not agent-crafted text (anti-spoofing) |
+
+<Warning>
+The AI agent (Domain A) has *zero* direct access to keys, RPC, or signing. Even a fully compromised agent can only submit TxIntents that must pass schema validation, PolicyEngine, preflight simulation, and human approval.
+</Warning>
+
+</Accordion>
+
+<Accordion title="4. &quot;Soft Assumptions&quot; in Security Models">
+
+Kelkar's philosophical point: crypto protocols make implicit "soft assumptions" (non-collusion, trusted setup, single-entity ownership) that are more likely to fail than mathematical assumptions (discrete log, factoring).
+
+**ISCL's soft assumptions and their robustness:**
+
+| Assumption | Risk | Mitigation |
+|---|---|---|
+| **User OS is not compromised** | Medium (rootkit/keylogger) | v0.2 roadmap: hardware wallet, remote signer |
+| **User reads approval summaries carefully** | Medium (fatigue, social engineering) | Risk scoring, color-coded warnings, anomaly detection |
+| **Passphrase is strong** | Low-Medium | scrypt KDF (N=2^18) makes brute-force expensive |
+| **RPC endpoints are honest** | Medium | Optional dual-RPC comparison, allowlist |
+| **ISCL Core itself is not tampered with** | Low (trusted by definition) | v0.2: TEE/enclave deployment, code signing |
+
+<Note>
+Kelkar would correctly note that the "user OS is secure" and "user pays attention to approvals" assumptions are the softest. These are explicitly acknowledged as v0.1 limitations with a roadmap to hardware wallets and session keys.
+</Note>
+
+</Accordion>
+
+<Accordion title="5. Proofs of Complete Knowledge">
+
+Kelkar's new primitive ensures a prover has *unencumbered* access to a key (not locked in a TEE). This is relevant for protocols that need to verify genuine human control.
+
+**ISCL does not need this** -- it is not verifying that the user "really" owns their key in a protocol-theoretic sense. ISCL just needs the passphrase to decrypt the keystore. If the user wants to put their ISCL keystore passphrase in a TEE-based automated system, that is their prerogative -- ISCL's policy engine still enforces all rules.
+
+</Accordion>
+
+</AccordionGroup>
+
+## Summary threat resilience matrix
+
+| Threat from Talk | Relevant to ISCL? | Protected? | Notes |
+|---|---|---|---|
+| TEE key encumbrance | No | N/A | ISCL does not assume single-entity ownership |
+| Vote bribery via TEE | No | N/A | ISCL has no voting/governance |
+| Unvested token selling | No | N/A | Not a vesting protocol |
+| Smart contract collusion | No | N/A | Not a multi-party protocol |
+| Whistleblowing circumvention | No | N/A | No accountability quorums |
+| AI bot value extraction | **Yes** | **Yes** | Core design scenario -- approval + policy + rate limits |
+| Approval summary spoofing | **Yes** | **Yes** | Canonical summary from Core, not from agent |
+| Approval replay | **Yes** | **Yes** | Single-use tokens, TTL, intentId binding |
+| RPC manipulation | **Yes** | **Partial** | Dual-RPC optional; full multi-RPC in v0.2 |
+| OS-level key theft | **Yes** | **No (v0.1)** | Hardware wallet planned for v0.2 |
+
+## Verdict
+
+ISCL is **well-architected against the threats that actually apply to it**. The academic attacks in the talk primarily target *multi-party decentralized protocols* (DAOs, threshold signing, coercion-resistant voting) where the attacker model includes rational, self-interested participants who may collude. ISCL's single-user, defense-in-depth model sidesteps most of these by design.
+
+The two areas where Kelkar's broader warnings are most relevant:
+
+<CardGroup cols={2}>
+  <Card title="Soft Assumptions" icon="triangle-exclamation">
+    The v0.1 reliance on OS security and user attentiveness are real gaps, acknowledged in the threat model with v0.2 mitigations planned (hardware wallet, session keys, remote signer).
+  </Card>
+  <Card title="AI as Attacker" icon="robot">
+    This is literally the core design scenario, handled with the three-domain architecture plus mandatory human approval for all fund-affecting operations.
+  </Card>
+</CardGroup>
+
+## Next steps
+
+- [Trust Domains](/concepts/trust-domains) -- The three-domain isolation model
+- [Risk Scoring](/concepts/risk-scoring) -- How transaction risk is quantified
+- [Policy Engine](/concepts/policy-engine) -- Configurable rules that enforce security

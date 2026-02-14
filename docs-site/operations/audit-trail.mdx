@@ -1,0 +1,533 @@
+---
+title: Audit Trail
+description: Append-only event logging, querying, and forensics
+icon: scroll
+---
+
+## Overview
+
+ISCL maintains an append-only audit trail that logs every fund-affecting operation performed by the system. Every transaction build, policy evaluation, approval decision, signature, and broadcast is recorded with a timestamp and correlated by `intentId`, making it possible to reconstruct the complete lifecycle of any transaction from initial request through final broadcast.
+
+The audit trail is backed by SQLite in WAL (Write-Ahead Logging) journal mode, providing durable writes with concurrent read access. The `AuditTraceService` (in `@clavion/audit`) is the single writer; all Domain B services log through it.
+
+<CardGroup cols={2}>
+  <Card title="Append-only" icon="lock">
+    The service exposes no UPDATE or DELETE operations.
+  </Card>
+  <Card title="Correlated" icon="link">
+    Every event carries an `intentId` that ties it to a specific TxIntent.
+  </Card>
+  <Card title="Structured" icon="brackets-curly">
+    Event payloads are stored as JSON, queryable via SQLite JSON functions.
+  </Card>
+  <Card title="Low-latency" icon="bolt">
+    Prepared statements are compiled once at startup and reused for every write.
+  </Card>
+</CardGroup>
+
+## Architecture
+
+```text
+                         +-----------------------+
+  tx.ts routes --------->|                       |
+  approval-service.ts -->| AuditTraceService     |---> SQLite (WAL mode)
+  wallet-service.ts ---->|   .log(event, data)   |      audit_events
+  approval-ui.ts ------->|   .getTrail(intentId) |      rate_limit_events
+  skills.ts routes ----->|   .getRecentEvents(n) |
+                         +-----------------------+
+```
+
+### Design decisions
+
+- **SQLite WAL mode** enables concurrent reads (API history queries) while the service is writing new audit events. Set via `PRAGMA journal_mode = WAL` at database open.
+- **Two tables** separate high-frequency rate-limit ticks from structured audit events, preventing rate-limit counting from scanning the full event table.
+- **Prepared statements** (`db.prepare()`) are compiled once in the constructor and bound per-call, avoiding repeated SQL parsing overhead.
+- **Four indexes** cover the primary query patterns: lookup by intent, lookup by event type, chronological ordering, and rate-limit sliding-window counts.
+
+## Database schema
+
+### audit\_events table
+
+```sql
+CREATE TABLE IF NOT EXISTS audit_events (
+  id         TEXT PRIMARY KEY,
+  timestamp  INTEGER NOT NULL,
+  intent_id  TEXT NOT NULL,
+  event      TEXT NOT NULL,
+  data       TEXT NOT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | TEXT PK | UUID v4, generated per event via `crypto.randomUUID()` |
+| `timestamp` | INTEGER | Unix epoch in milliseconds (`Date.now()`) |
+| `intent_id` | TEXT | Correlation ID matching `TxIntent.id`; `"system"` for non-transaction events (e.g. skill registration) |
+| `event` | TEXT | Event type name (see Event Type Catalog below) |
+| `data` | TEXT | JSON-serialized payload with `intentId` plus event-specific fields |
+| `created_at` | DATETIME | SQLite `CURRENT_TIMESTAMP` default (ISO 8601 string) |
+
+### rate\_limit\_events table
+
+```sql
+CREATE TABLE IF NOT EXISTS rate_limit_events (
+  wallet_address TEXT NOT NULL,
+  timestamp      INTEGER NOT NULL
+);
+```
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `wallet_address` | TEXT | Ethereum address (checksummed or lowercase) |
+| `timestamp` | INTEGER | Unix epoch in milliseconds when the tick was recorded |
+
+### Indexes
+
+All four indexes are created at startup via `CREATE INDEX IF NOT EXISTS`:
+
+| Index Name | Table | Columns | Purpose |
+|------------|-------|---------|---------|
+| `idx_intent_id` | `audit_events` | `intent_id` | Fast lookup of all events for a given transaction |
+| `idx_event` | `audit_events` | `event` | Filter by event type (e.g. find all denials) |
+| `idx_timestamp` | `audit_events` | `timestamp` | Chronological ordering for recent-events queries |
+| `idx_rate_wallet_ts` | `rate_limit_events` | `wallet_address, timestamp` | Sliding-window count per wallet |
+
+## Event type catalog
+
+The following audit events are emitted across the ISCL codebase. Each event is logged via `auditTrace.log(eventName, { intentId, ...fields })`.
+
+### Transaction pipeline events (tx.ts)
+
+| Event Name | When Emitted | Key Data Fields |
+|------------|-------------|-----------------|
+| `policy_evaluated` | After PolicyEngine evaluates a TxIntent in `/v1/tx/build` | `intentId`, `decision` ("allow"\|"deny"\|"require_approval"), `reasons` |
+| `tx_built` | After `buildFromIntent()` successfully builds a BuildPlan | `intentId`, `txRequestHash`, `description` |
+| `preflight_completed` | After PreflightService simulates the transaction in `/v1/tx/preflight` | `intentId`, `simulationSuccess`, `riskScore`, `gasEstimate` |
+| `tx_broadcast` | After successful `sendRawTransaction` via RPC | `intentId`, `txHash` |
+| `broadcast_failed` | When `sendRawTransaction` throws an error | `intentId`, `txHash`, `error` |
+
+### Approval events (approval-service.ts, tx.ts)
+
+| Event Name | When Emitted | Key Data Fields |
+|------------|-------------|-----------------|
+| `approve_request_created` | When `/v1/tx/approve-request` creates an approval prompt | `intentId`, `decision`, `riskScore` |
+| `approval_granted` | When user confirms the approval prompt (CLI or web) | `intentId`, `action`, `tokenId`, `riskScore` |
+| `approval_rejected` | When user declines the approval prompt | `intentId`, `action`, `reason` ("user_declined") |
+| `web_approval_decided` | When a web UI decision is submitted via `/v1/approvals/:requestId/decide` | `intentId`, `requestId`, `approved` (boolean), `action` |
+
+### Signing events (wallet-service.ts)
+
+| Event Name | When Emitted | Key Data Fields |
+|------------|-------------|-----------------|
+| `signature_created` | After successful transaction signing | `intentId`, `txRequestHash`, `signerAddress`, `txHash` |
+| `signing_denied` | When signing is refused for any reason | `intentId`, `reason` (one of: `"missing_policy_decision"`, `"policy_deny"`, `"missing_approval_token"`, `"invalid_approval_token"`, `"key_locked"`), plus context fields |
+
+### Skill registry events (skills.ts)
+
+| Event Name | When Emitted | Key Data Fields |
+|------------|-------------|-----------------|
+| `skill_registered` | After successful skill manifest registration | `intentId` ("system"), `skillName`, `manifestHash`, `publisherAddress` |
+| `skill_registration_failed` | When registration fails (duplicate, validation, scan) | `intentId` ("system"), `skillName`, `reason` |
+| `skill_revoked` | When a skill is deleted via `DELETE /v1/skills/:name` | `intentId` ("system"), `skillName` |
+
+### Complete event flow example
+
+A typical successful transaction produces this sequence of audit events:
+
+<Steps>
+  <Step title="policy_evaluated">
+    Policy says "require_approval"
+  </Step>
+  <Step title="approve_request_created">
+    Approval prompt generated
+  </Step>
+  <Step title="approval_granted">
+    User confirms, token issued
+  </Step>
+  <Step title="tx_built">
+    BuildPlan created
+  </Step>
+  <Step title="signature_created">
+    Transaction signed
+  </Step>
+  <Step title="tx_broadcast">
+    Sent to network
+  </Step>
+</Steps>
+
+<Note>
+A denied transaction may stop at step 1 (policy deny) or step 3 (user rejection).
+</Note>
+
+## Querying the audit trail
+
+### Via API
+
+**`GET /v1/approvals/history?limit=N`** returns the most recent audit events across all intents. The `limit` query parameter is optional (default: 20, maximum: 100).
+
+```bash
+curl http://localhost:3000/v1/approvals/history?limit=5
+```
+
+Response:
+
+```json
+{
+  "events": [
+    {
+      "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      "timestamp": 1706900000000,
+      "intentId": "550e8400-e29b-41d4-a716-446655440000",
+      "event": "tx_broadcast",
+      "data": {
+        "intentId": "550e8400-e29b-41d4-a716-446655440000",
+        "txHash": "0xabc123..."
+      }
+    },
+    {
+      "id": "b2c3d4e5-f6a7-8901-bcde-f12345678901",
+      "timestamp": 1706899999000,
+      "intentId": "550e8400-e29b-41d4-a716-446655440000",
+      "event": "signature_created",
+      "data": {
+        "intentId": "550e8400-e29b-41d4-a716-446655440000",
+        "txRequestHash": "0xdef456...",
+        "signerAddress": "0x1234...5678",
+        "txHash": "0xabc123..."
+      }
+    }
+  ]
+}
+```
+
+Events are returned in reverse chronological order (most recent first).
+
+### Programmatic access
+
+The `AuditTraceService` exposes two read methods:
+
+```typescript
+import { AuditTraceService } from "@clavion/audit";
+
+const auditTrace = new AuditTraceService("/path/to/audit.db");
+
+// Get all events for a specific transaction, ordered chronologically (ASC)
+const trail = auditTrace.getTrail("550e8400-e29b-41d4-a716-446655440000");
+
+// Get the 20 most recent events across all intents (DESC order)
+const recent = auditTrace.getRecentEvents(20);
+```
+
+Both methods return `AuditEvent[]`:
+
+```typescript
+interface AuditEvent {
+  id: string;          // UUID
+  timestamp: number;   // Unix ms
+  intentId: string;    // correlation ID
+  event: string;       // event type name
+  data: Record<string, unknown>;  // parsed JSON payload
+}
+```
+
+<Tip>
+`getTrail()` returns events in ascending chronological order (oldest first) to match the natural transaction lifecycle, while `getRecentEvents()` returns events in descending order (newest first) for dashboard display.
+</Tip>
+
+### Direct SQLite queries
+
+For ad-hoc investigation, query the SQLite database directly. The database file location is set at startup (typically `./data/audit.db` or as configured via environment variables).
+
+**Find all events for a transaction:**
+
+```sql
+SELECT id, timestamp, event, data
+FROM audit_events
+WHERE intent_id = '550e8400-e29b-41d4-a716-446655440000'
+ORDER BY timestamp ASC;
+```
+
+**Find all denied transactions in the last 24 hours:**
+
+```sql
+SELECT id, timestamp, intent_id, json_extract(data, '$.reason') AS reason
+FROM audit_events
+WHERE event = 'signing_denied'
+  AND timestamp > (strftime('%s', 'now') * 1000 - 86400000)
+ORDER BY timestamp DESC;
+```
+
+**Count transactions per wallet in the last hour:**
+
+```sql
+SELECT wallet_address, COUNT(*) AS tx_count
+FROM rate_limit_events
+WHERE timestamp > (strftime('%s', 'now') * 1000 - 3600000)
+GROUP BY wallet_address
+ORDER BY tx_count DESC;
+```
+
+**Find all policy denials with reasons:**
+
+```sql
+SELECT intent_id,
+       timestamp,
+       json_extract(data, '$.decision') AS decision,
+       json_extract(data, '$.reasons') AS reasons
+FROM audit_events
+WHERE event = 'policy_evaluated'
+  AND json_extract(data, '$.decision') = 'deny'
+ORDER BY timestamp DESC
+LIMIT 50;
+```
+
+**List all broadcast failures:**
+
+```sql
+SELECT intent_id,
+       timestamp,
+       json_extract(data, '$.txHash') AS tx_hash,
+       json_extract(data, '$.error') AS error_message
+FROM audit_events
+WHERE event = 'broadcast_failed'
+ORDER BY timestamp DESC;
+```
+
+## Incident investigation
+
+When investigating a suspicious or failed transaction, follow these steps to reconstruct the full picture.
+
+<Steps>
+  <Step title="Identify the intentId">
+    If you have a transaction hash, find the corresponding intentId:
+
+    ```sql
+    SELECT intent_id
+    FROM audit_events
+    WHERE event IN ('tx_broadcast', 'broadcast_failed', 'signature_created')
+      AND json_extract(data, '$.txHash') = '0x<your_tx_hash>'
+    LIMIT 1;
+    ```
+
+    If you have a wallet address, find recent intents for that wallet:
+
+    ```sql
+    SELECT DISTINCT intent_id, MIN(timestamp) AS first_seen
+    FROM audit_events
+    WHERE json_extract(data, '$.intentId') IS NOT NULL
+      AND (json_extract(data, '$.signerAddress') = '0x<wallet>'
+           OR json_extract(data, '$.walletAddress') = '0x<wallet>')
+    GROUP BY intent_id
+    ORDER BY first_seen DESC
+    LIMIT 20;
+    ```
+  </Step>
+  <Step title="Pull the full trail">
+    ```sql
+    SELECT event, timestamp, data
+    FROM audit_events
+    WHERE intent_id = '<intentId>'
+    ORDER BY timestamp ASC;
+    ```
+
+    Or programmatically:
+
+    ```typescript
+    const trail = auditTrace.getTrail(intentId);
+    for (const event of trail) {
+      console.log(`[${new Date(event.timestamp).toISOString()}] ${event.event}`);
+      console.log(JSON.stringify(event.data, null, 2));
+    }
+    ```
+  </Step>
+  <Step title="Check the policy decision">
+    Look for `policy_evaluated` events. If the decision was `"deny"`, the `reasons` array explains why:
+
+    ```json
+    {
+      "intentId": "...",
+      "decision": "deny",
+      "reasons": ["value_exceeds_max: 5000000000000000000 > 1000000000000000000"]
+    }
+    ```
+
+    Common deny reasons include:
+    - `value_exceeds_max` -- transfer value exceeds `maxValueWei` in policy config
+    - `approval_exceeds_max` -- ERC-20 approval amount exceeds `maxApprovalAmount`
+    - `chain_not_allowed` -- `chainId` not in `allowedChains`
+    - `recipient_not_in_allowlist` -- destination not in `recipientAllowlist`
+    - `contract_not_in_allowlist` -- contract not in `contractAllowlist`
+    - `risk_score_too_high` -- preflight risk score exceeds `maxRiskScore`
+    - `rate_limit_exceeded` -- wallet exceeded `maxTxPerHour`
+  </Step>
+  <Step title="Check the approval flow">
+    For transactions requiring approval, look at the approval events:
+
+    1. `approve_request_created` -- approval prompt was generated.
+    2. `approval_granted` or `approval_rejected` -- CLI/programmatic approval outcome.
+    3. `web_approval_decided` -- web UI approval outcome (includes `requestId` and `approved` boolean).
+
+    <Note>
+    If there is an `approve_request_created` but no subsequent grant/reject, the approval request likely expired (TTL is 300 seconds by default).
+    </Note>
+  </Step>
+  <Step title="Verify signing and broadcast">
+    - `signature_created` confirms the transaction was signed. Check `signerAddress` and `txRequestHash`.
+    - `signing_denied` means the WalletService refused. The `reason` field indicates why: missing policy decision, invalid approval token, policy deny, or locked key.
+    - `tx_broadcast` confirms the signed transaction was sent to the network.
+    - `broadcast_failed` indicates an RPC-level failure. The `error` field contains the RPC error message.
+  </Step>
+  <Step title="Cross-reference rate-limit events">
+    If rate limiting is suspected, check how many transactions the wallet has executed recently:
+
+    ```sql
+    SELECT COUNT(*) AS tx_count,
+           MIN(timestamp) AS earliest,
+           MAX(timestamp) AS latest
+    FROM rate_limit_events
+    WHERE wallet_address = '0x<wallet>'
+      AND timestamp > (strftime('%s', 'now') * 1000 - 3600000);
+    ```
+
+    Compare the count against the `maxTxPerHour` setting in your [Configuration](/reference/config-reference).
+  </Step>
+</Steps>
+
+## Rate limiting internals
+
+Rate limiting uses a dedicated `rate_limit_events` table separate from the main audit trail for performance. This table receives a write on every non-denied transaction (both "allow" and "require_approval" outcomes), so it has a high write frequency.
+
+### How it works
+
+**Recording ticks:** When a transaction passes the policy check (not denied), `auditTrace.recordRateLimitTick(walletAddress)` inserts a row with the current timestamp.
+
+```typescript
+recordRateLimitTick(walletAddress: string): void {
+  this.rateLimitInsertStmt.run(walletAddress, Date.now());
+}
+```
+
+**Counting recent transactions:** Before evaluating policy, the route handler queries the sliding window count:
+
+```typescript
+const recentTxCount = auditTrace.countRecentTxByWallet(
+  intent.wallet.address,
+  3_600_000,  // 1 hour in milliseconds
+);
+```
+
+This executes:
+
+```sql
+SELECT COUNT(*) AS count
+FROM rate_limit_events
+WHERE wallet_address = ?
+  AND timestamp > ?
+```
+
+**Policy enforcement:** The `recentTxCount` is passed to `evaluate()`, which compares it against `policyConfig.maxTxPerHour`. If exceeded, the policy returns `decision: "deny"` with reason `"rate_limit_exceeded"`.
+
+### Configuration
+
+Rate limiting is configured via the `maxTxPerHour` field in `PolicyConfig`:
+
+```json
+{
+  "maxTxPerHour": 10
+}
+```
+
+The default value is `10` transactions per hour per wallet address. The sliding window is always 3,600,000 ms (1 hour). See [Configuration Reference](/reference/config-reference) for full policy configuration.
+
+<Tip>
+The composite index `idx_rate_wallet_ts` on `(wallet_address, timestamp)` makes the sliding-window `COUNT(*)` query efficient even with high row counts. Rows are never deleted by the application. For long-running deployments, consider periodic cleanup of old rate-limit rows.
+</Tip>
+
+## Compliance and retention
+
+### Append-only guarantee
+
+The `AuditTraceService` class provides no `UPDATE` or `DELETE` methods. All writes go through the `log()` method (for audit events) and `recordRateLimitTick()` (for rate-limit ticks). This design ensures that once an event is written, it cannot be modified or removed through the application layer.
+
+The only mutating SQL statements in the service are:
+
+```sql
+INSERT INTO audit_events (id, timestamp, intent_id, event, data) VALUES (?, ?, ?, ?, ?)
+INSERT INTO rate_limit_events (wallet_address, timestamp) VALUES (?, ?)
+```
+
+### Durability
+
+SQLite WAL mode ensures that committed transactions survive process crashes. The WAL file (`audit.db-wal`) and shared-memory file (`audit.db-shm`) are managed automatically by SQLite. No additional configuration is required for crash recovery.
+
+### Backup procedures
+
+<Tabs>
+  <Tab title="File copy">
+    Copy the database file while the application is running. SQLite WAL mode ensures read consistency. Copy all three files:
+    - `audit.db`
+    - `audit.db-wal`
+    - `audit.db-shm`
+  </Tab>
+  <Tab title="SQLite backup API">
+    For zero-downtime backups:
+
+    ```bash
+    sqlite3 /path/to/audit.db ".backup /path/to/backup.db"
+    ```
+  </Tab>
+</Tabs>
+
+### Export to JSONL
+
+For external analysis or archival, export the audit trail as JSON lines:
+
+```bash
+sqlite3 /path/to/audit.db \
+  "SELECT json_object(
+     'id', id,
+     'timestamp', timestamp,
+     'intentId', intent_id,
+     'event', event,
+     'data', json(data)
+   ) FROM audit_events ORDER BY timestamp ASC;" \
+  > audit-export.jsonl
+```
+
+Each line is a self-contained JSON object suitable for ingestion into log aggregation systems (Elasticsearch, Loki, Datadog, etc.).
+
+### Retention and cleanup
+
+The application does not enforce automatic retention policies. For long-running deployments:
+
+- **Audit events** should be retained indefinitely or per your compliance requirements. These are low-volume (one batch per transaction).
+- **Rate-limit events** accumulate faster and can be pruned periodically. Events older than the sliding window (1 hour) are no longer needed for rate limiting, but may be retained for analysis:
+
+```sql
+-- Remove rate-limit ticks older than 7 days (safe, does not affect rate limiting)
+DELETE FROM rate_limit_events
+WHERE timestamp < (strftime('%s', 'now') * 1000 - 604800000);
+```
+
+<Warning>
+Run cleanup queries during maintenance windows or via a scheduled job. The composite index ensures the DELETE is efficient.
+</Warning>
+
+### Database sizing
+
+Approximate storage per record:
+- **audit_events**: ~300-500 bytes per event (UUID + timestamp + JSON payload)
+- **rate_limit_events**: ~60 bytes per tick (address + timestamp)
+
+A deployment processing 100 transactions per day will produce roughly:
+- ~600 audit events/day (~200 KB/day)
+- ~100 rate-limit ticks/day (~6 KB/day)
+
+At this rate, a year of uncompacted data is approximately 75 MB, well within SQLite's practical limits.
+
+## Next steps
+
+- [Observability](/operations/observability) -- Structured logging, health monitoring, and metrics
+- [Incident Runbook](/operations/incident-runbook) -- Symptom-indexed diagnosis guide
+- [Configuration Reference](/reference/config-reference) -- All configurable parameters

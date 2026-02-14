@@ -1,0 +1,35 @@
+---
+title: Operations
+description: Guides for running Clavion in production
+icon: server
+---
+
+## Running Clavion in production
+
+These guides cover the operational aspects of deploying and maintaining a Clavion/ISCL instance. Whether you are investigating an incident, tuning performance, or planning an upgrade, start here.
+
+<CardGroup cols={2}>
+  <Card title="Audit Trail" icon="scroll" href="/operations/audit-trail">
+    Append-only event logging, querying patterns, and forensic investigation procedures for the SQLite audit database.
+  </Card>
+  <Card title="Observability" icon="chart-line" href="/operations/observability">
+    Structured logging with pino, health monitoring, metrics derivation, and log forwarding to ELK, Loki, or CloudWatch.
+  </Card>
+  <Card title="Incident Runbook" icon="triangle-exclamation" href="/operations/incident-runbook">
+    Symptom-indexed guide for diagnosing operational issues, from unauthorized transactions to RPC errors.
+  </Card>
+  <Card title="Performance Tuning" icon="gauge-high" href="/operations/performance-tuning">
+    Optimize SQLite, RPC latency, transaction throughput, and resource usage for your deployment profile.
+  </Card>
+  <Card title="Migration & Upgrades" icon="arrow-up-right-dots" href="/operations/migration">
+    Safely upgrade between Clavion versions with backward compatibility guarantees and rollback procedures.
+  </Card>
+</CardGroup>
+
+## Prerequisites
+
+All operations guides assume:
+
+- ISCL Core is installed and running ([Quick Start](/start/quickstart))
+- At least one wallet key is imported ([CLI](/start/cli))
+- Basic familiarity with the [Architecture](/concepts/architecture) and [Trust Domains](/concepts/trust-domains)

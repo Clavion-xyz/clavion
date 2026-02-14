@@ -7,6 +7,7 @@ import type {
   AllowanceChange,
   RiskContext,
 } from "@clavion/types";
+import { extractTokenAddresses, extractContractAddress } from "@clavion/types";
 import type { RpcClient } from "@clavion/types/rpc";
 import { computeRiskScore } from "./risk-scorer.js";
 
@@ -19,7 +20,9 @@ export class PreflightService {
   async simulate(
     intent: TxIntent,
     buildPlan: BuildPlan,
+    rpcOverride?: RpcClient,
   ): Promise<PreflightResult> {
+    const rpc = rpcOverride ?? this.rpcClient;
     const { txRequest } = buildPlan;
     const from = intent.wallet.address as `0x${string}`;
     const to = txRequest.to as `0x${string}`;
@@ -27,12 +30,12 @@ export class PreflightService {
     const value = txRequest.value ?? 0n;
 
     // 1. Simulate the call
-    const callResult = await this.rpcClient.call({ to, data, from, value });
+    const callResult = await rpc.call({ to, data, from, value });
 
     // 2. Estimate gas
     let gasEstimate = 0n;
     try {
-      gasEstimate = await this.rpcClient.estimateGas({ to, data, from, value });
+      gasEstimate = await rpc.estimateGas({ to, data, from, value });
     } catch {
       // If estimation fails and simulation also failed, use a default
       if (!callResult.success) {
@@ -41,10 +44,10 @@ export class PreflightService {
     }
 
     // 3. Collect balance diffs
-    const balanceDiffs = await this.collectBalanceDiffs(intent, from);
+    const balanceDiffs = await this.collectBalanceDiffs(intent, from, rpc);
 
     // 4. Collect allowance changes
-    const allowanceChanges = await this.collectAllowanceChanges(intent, from);
+    const allowanceChanges = await this.collectAllowanceChanges(intent, from, rpc);
 
     // 5. Compute risk score
     const riskContext = this.buildRiskContext(
@@ -84,12 +87,13 @@ export class PreflightService {
   private async collectBalanceDiffs(
     intent: TxIntent,
     from: `0x${string}`,
+    rpc: RpcClient,
   ): Promise<BalanceDiff[]> {
     const diffs: BalanceDiff[] = [];
     const action = intent.action;
 
     if (action.type === "transfer_native") {
-      const balance = await this.rpcClient.readNativeBalance(from);
+      const balance = await rpc.readNativeBalance(from);
       diffs.push({
         asset: "ETH",
         delta: `-${action.amount}`,
@@ -98,7 +102,7 @@ export class PreflightService {
       });
     } else if (action.type === "transfer") {
       const token = action.asset.address as `0x${string}`;
-      const balance = await this.rpcClient.readBalance(token, from);
+      const balance = await rpc.readBalance(token, from);
       diffs.push({
         asset: action.asset.symbol ?? action.asset.address,
         delta: `-${action.amount}`,
@@ -107,7 +111,7 @@ export class PreflightService {
       });
     } else if (action.type === "swap_exact_in") {
       const tokenIn = action.assetIn.address as `0x${string}`;
-      const balanceIn = await this.rpcClient.readBalance(tokenIn, from);
+      const balanceIn = await rpc.readBalance(tokenIn, from);
       diffs.push({
         asset: action.assetIn.symbol ?? action.assetIn.address,
         delta: `-${action.amountIn}`,
@@ -116,7 +120,7 @@ export class PreflightService {
       });
     } else if (action.type === "swap_exact_out") {
       const tokenIn = action.assetIn.address as `0x${string}`;
-      const balanceIn = await this.rpcClient.readBalance(tokenIn, from);
+      const balanceIn = await rpc.readBalance(tokenIn, from);
       diffs.push({
         asset: action.assetIn.symbol ?? action.assetIn.address,
         delta: `-${action.maxAmountIn} (max)`,
@@ -131,13 +135,14 @@ export class PreflightService {
   private async collectAllowanceChanges(
     intent: TxIntent,
     from: `0x${string}`,
+    rpc: RpcClient,
   ): Promise<AllowanceChange[]> {
     if (intent.action.type !== "approve") return [];
 
     const action = intent.action;
     const token = action.asset.address as `0x${string}`;
     const spender = action.spender as `0x${string}`;
-    const currentAllowance = await this.rpcClient.readAllowance(
+    const currentAllowance = await rpc.readAllowance(
       token,
       from,
       spender,
@@ -160,7 +165,7 @@ export class PreflightService {
   ): RiskContext {
     const action = intent.action;
 
-    const tokens = this.extractTokenAddresses(intent);
+    const tokens = extractTokenAddresses(intent);
     const tokenInAllowlist = tokens.every(
       (t) =>
         this.policyConfig.tokenAllowlist.length === 0 ||
@@ -169,7 +174,7 @@ export class PreflightService {
         ),
     );
 
-    const contractAddress = this.extractContractAddress(intent);
+    const contractAddress = extractContractAddress(intent);
     const contractInAllowlist =
       !contractAddress ||
       this.policyConfig.contractAllowlist.length === 0 ||
@@ -206,30 +211,4 @@ export class PreflightService {
     return context;
   }
 
-  private extractTokenAddresses(intent: TxIntent): string[] {
-    const action = intent.action;
-    switch (action.type) {
-      case "transfer":
-      case "approve":
-        return [action.asset.address];
-      case "swap_exact_in":
-      case "swap_exact_out":
-        return [action.assetIn.address, action.assetOut.address];
-      default:
-        return [];
-    }
-  }
-
-  private extractContractAddress(intent: TxIntent): string | undefined {
-    const action = intent.action;
-    switch (action.type) {
-      case "approve":
-        return action.spender;
-      case "swap_exact_in":
-      case "swap_exact_out":
-        return action.router;
-      default:
-        return undefined;
-    }
-  }
 }
